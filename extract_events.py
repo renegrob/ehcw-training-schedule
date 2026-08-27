@@ -25,7 +25,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-from parse_plan import Cell, DayCells, WeekPlan
+from parse_plan import WEEKDAYS, Cell, DayCells, WeekPlan
 
 # Games list only a start time; assume this duration for their end time.
 DEFAULT_GAME_MINUTES = 90
@@ -295,10 +295,55 @@ def _build_day_events(
     return events
 
 
+def _age_group(team_label: str) -> str | None:
+    """"U14 A" -> "U14". Returns None for non-age-group teams (MHL, Senioren...)."""
+    match = re.match(r"(U\d+)", team_label)
+    return match.group(1) if match else None
+
+
+def _forder_events(
+    week: WeekPlan, source: str, summary_format: str, team: str, age_group: str
+) -> list[Event]:
+    """Fördertrainings live in their own "Förder- trainings" row and are aimed
+    at a whole age group (e.g. "Training für U14/U16"), so they apply to every
+    U14 team, not just the one whose row they'd otherwise sit in. Pull in the
+    days that mention this team's age group."""
+    group_re = re.compile(rf"\b{re.escape(age_group)}\b")
+    events: list[Event] = []
+
+    for team_label, day_map in week.teams.items():
+        if "förder" not in team_label.lower():
+            continue
+        for day, cells in sorted(day_map.items()):
+            if cells.day_date is None:
+                continue
+            audience = " ".join(
+                p for p in (cells.feld.art, cells.away.art) if p
+            ).strip()
+            if not group_re.search(audience):
+                continue
+
+            halle = _parse_activity(cells.halle.art)
+            if not (halle.type_code or halle.start):
+                continue
+
+            type_label = f"Förder {halle.type_code}" if halle.type_code else "Förder"
+            type_full = "Fördertraining"
+            garderobe = _combine_garderobe(cells.halle.g, cells.feld.g)
+            notes = [f"Fördertraining ({audience})"] if audience else ["Fördertraining"]
+            events.append(
+                _make_event(
+                    source, WEEKDAYS[day], cells.day_date, type_label, type_full,
+                    "", "", _fmt_time(halle.start), _fmt_time(halle.end),
+                    garderobe, _normalise_transport(cells.halle.trsp),
+                    summary_format, team, notes,
+                )
+            )
+    return events
+
+
 def extract_events(week: WeekPlan, config: dict) -> list[Event]:
     """Extracts events for the configured team out of one week's plan."""
-    from parse_plan import WEEKDAYS
-
     team = config["team"]
     if team not in week.teams:
         return []
@@ -314,4 +359,11 @@ def extract_events(week: WeekPlan, config: dict) -> list[Event]:
         events.extend(
             _build_day_events(source, WEEKDAYS[day], cells, summary_format, team)
         )
+
+    # Fördertrainings aimed at this team's whole age group (e.g. "U14/U16").
+    age_group = _age_group(team)
+    if age_group:
+        events.extend(_forder_events(week, source, summary_format, team, age_group))
+
+    events.sort(key=lambda e: (e.day_date, e.time_start or ""))
     return events
