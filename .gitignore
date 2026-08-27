@@ -1,0 +1,9 @@
+downloads/
+markdown/
+events.txt
+events.json
+sync_configs.py
+.venv/
+.env
+__pycache__/
+*.pyc
