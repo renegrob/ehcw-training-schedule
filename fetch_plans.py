@@ -20,16 +20,34 @@ DOWNLOAD_DIR = Path(__file__).parent / "downloads"
 WEEK_NUMBER_RE = re.compile(r"^Wochenplan-(\d+)", re.IGNORECASE)
 
 
-def _week_key(entry: dict) -> str:
-    """Groups revisions of the same week's plan together.
+def week_key_from_name(filename: str) -> str:
+    """Groups revisions of the same week's plan together by week number.
 
     A revised plan is republished under a new filename (e.g.
     "Wochenplan-34_Neu_1.pdf" superseding "Wochenplan-34.pdf") rather than
-    overwriting the old one, so older revisions stick around in the media
-    library as obsolete clutter unless de-duplicated by week number here.
+    overwriting the old one, so older revisions stick around unless
+    de-duplicated by week number here.
     """
-    match = WEEK_NUMBER_RE.match(entry["filename"])
-    return match.group(1) if match else entry["filename"]
+    match = WEEK_NUMBER_RE.match(filename)
+    return match.group(1) if match else filename
+
+
+def _week_key(entry: dict) -> str:
+    return week_key_from_name(entry["filename"])
+
+
+def latest_local_pdfs(download_dir: Path = DOWNLOAD_DIR) -> list[Path]:
+    """The latest downloaded PDF per week, newest week first. Guards against a
+    superseded revision still lingering on disk (fetch only downloads the
+    latest, but never deletes the old file), keeping the most recently
+    modified file per week number."""
+    latest: dict[str, Path] = {}
+    for path in download_dir.glob("Wochenplan-*.pdf"):
+        key = week_key_from_name(path.name)
+        current = latest.get(key)
+        if current is None or path.stat().st_mtime > current.stat().st_mtime:
+            latest[key] = path
+    return sorted(latest.values(), key=lambda p: week_key_from_name(p.name), reverse=True)
 
 
 def list_wochenplan_pdfs() -> list[dict]:

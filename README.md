@@ -6,8 +6,9 @@ syncing training/game entries into Google Calendar (same idempotent-upsert
 approach as [aws-ical-sync](../aws-ical-sync), reusing its Google service
 account secret).
 
-**Current state (scaffolding):** PDF discovery/download + PDF→Markdown
-conversion. Team/row extraction and calendar sync are not built yet.
+**Pipeline:** discover/download the weekly PDFs → parse the team×weekday grid
+→ extract per-team training/game events → sync them into Google Calendar
+(idempotent upsert, dry-run by default).
 
 ## Setup
 
@@ -50,33 +51,39 @@ table-structure model — even in accurate mode — merged adjacent team rows
 together (e.g. "MHL" and "U21 Top" collapsed into one row). pdfplumber reads
 the vector grid directly and separates every row/column correctly.
 
-## Next steps
+## Configure teams
 
-- **Team/row extraction**: match a configured team by its *exact* row label
-  (e.g. `"U14 A"` — note "U14 Elit", "U14 Top", and "U14 A" are three
-  separate teams, so a bare `"U14"` is not selective enough), while still
-  picking up generic age-group mentions elsewhere in the document (e.g. the
-  "Förder-trainings" row's "Training für U14/U16" applies to all U14
-  sub-teams, and remarks like "gem. Aufgebot" or "mit U16 A" signal joint
-  sessions).
-- **Templated event content**: subject built from the `Art` code expanded
-  via the PDF's own legend (ET=Eistraining, TT=Trockentraining,
-  TH=Torhütertraining, FS=Freundschaft, MS=Meisterschaft, PO=Play-Off,
-  TU=Turnier, ZC=Züri-Cup, TRL=Trainingslager) plus the `Feld` place;
-  description including `G` (Garderobe) and `Trsp` (Transport).
-- **Traceable `source`**: each extracted event should carry a `source` of
-  `{pdf_filename}/{team-label-with-dashes}`, e.g. `Wochenplan-39.pdf/U14-A`
-  — also the basis for a future calendar UID/dedup key.
-- **Local dry-run script**: extraction-only script that writes the resulting
-  events to a JSON/text file, no Google API calls, so a team's config can be
-  tested without touching a real calendar.
-- **Multi-team config**: a list of entries (one per team, à la
-  `aws-ical-sync`'s `sync_configs.py`) pairing an exact team label with a
-  target `calendar_id`, so other club members can add their team via config,
-  not code changes.
-- **Periodic sync**: scan for new/changed PDFs and upsert events into Google
-  Calendar, following `aws-ical-sync`'s `events.import()` + `iCalUID`
-  pattern.
+Copy `sync_configs_example.py` to `sync_configs.py` (gitignored) and list one
+entry per team. Each pairs an *exact* team label (e.g. `"U14 A"` — "U14 Elit",
+"U14 Top" and "U14 A" are distinct teams) with a target `calendar_id` and
+title templates. See the example file for every field, including
+`game_summary_format` (games are a tentative heads-up) and `mih_overlap`
+(`REMOVE` | `KEEP` | `SHADOW`) for events that overlap the myice feed.
+
+## Preview extracted events (offline, no credentials)
+
+```bash
+uv run python list_events.py
+```
+
+Parses the downloaded PDFs and prints every event it would create per team,
+including any `⚠️ FEHLER` markers, to the console and `events.txt`. No Google
+API calls — safe for verifying a team's config.
+
+## Sync to Google Calendar
+
+```bash
+uv run python sync.py            # dry-run: reads the calendar, writes nothing
+uv run python sync.py --apply    # actually create/update/delete events
+```
+
+Each event is upserted via `events.import()` keyed on a namespaced `iCalUID`
+(so re-runs never duplicate), tagged with a private `source=ehcw-trainings`
+property so reconciliation only ever touches events *this* project created —
+never the myice (`mih-ehc-`) ones. Events removed from the plans are deleted;
+past events are left alone (`SKIP_PAST_EVENTS=false` to include them). A
+parse/extract failure becomes a loud all-day error event rather than a silent
+gap. Requires AWS credentials that can read the service-account secret.
 
 ## Google Calendar secret
 

@@ -10,13 +10,13 @@ Uses safe_extract, so a broken/renamed/reformatted PDF surfaces as a visible
 from pathlib import Path
 
 from extract_events import Event, safe_extract
+from fetch_plans import latest_local_pdfs
 
 try:
     from sync_configs import CONFIGS
 except ImportError:  # fall back to the example so the script still runs
     from sync_configs_example import CONFIGS
 
-DOWNLOAD_DIR = Path(__file__).parent / "downloads"
 OUTPUT_FILE = Path(__file__).parent / "events.txt"
 
 
@@ -44,7 +44,7 @@ def _format_event(event: Event) -> str:
 
 
 def main():
-    pdfs = sorted(DOWNLOAD_DIR.glob("Wochenplan-*.pdf"))
+    pdfs = sorted(latest_local_pdfs(), key=lambda p: p.name)
     blocks: list[str] = []
     error_count = 0
 
