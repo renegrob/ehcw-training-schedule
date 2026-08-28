@@ -2,12 +2,14 @@
 Dry-run: parse every downloaded Wochenplan, extract the configured teams'
 events, and print them as text for verification. Writes the same listing to
 events.txt. No Google Calendar calls.
+
+Uses safe_extract, so a broken/renamed/reformatted PDF surfaces as a visible
+⚠️ FEHLER event rather than silently producing nothing.
 """
 
 from pathlib import Path
 
-from extract_events import Event, extract_events
-from parse_plan import parse_week
+from extract_events import Event, safe_extract
 
 try:
     from sync_configs import CONFIGS
@@ -44,19 +46,27 @@ def _format_event(event: Event) -> str:
 def main():
     pdfs = sorted(DOWNLOAD_DIR.glob("Wochenplan-*.pdf"))
     blocks: list[str] = []
+    error_count = 0
 
     for config in CONFIGS:
         team = config["team"]
         blocks.append(f"===== {team}  ->  {config['calendar_id']} =====")
         for pdf in pdfs:
-            week = parse_week(pdf)
-            events = extract_events(week, config)
+            events = safe_extract(pdf, config)
             if not events:
                 continue
-            blocks.append(f"\n{pdf.name}  ({len(events)} events)")
+            errors = sum(1 for e in events if e.is_error)
+            error_count += errors
+            suffix = f", {errors} FEHLER" if errors else ""
+            blocks.append(f"\n{pdf.name}  ({len(events)} events{suffix})")
             for event in events:
                 blocks.append(_format_event(event))
         blocks.append("")
+
+    if error_count:
+        blocks.append(f"⚠️  {error_count} FEHLER - bitte diese Wochen manuell prüfen.")
+    else:
+        blocks.append("Keine Fehler.")
 
     output = "\n".join(blocks)
     print(output)

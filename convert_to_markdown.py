@@ -67,7 +67,15 @@ def convert_pdf(pdf_path: Path, markdown_dir: Path = MARKDOWN_DIR) -> Path:
 
 
 def convert_all(pdf_paths: list[Path], markdown_dir: Path = MARKDOWN_DIR) -> list[Path]:
-    return [convert_pdf(pdf_path, markdown_dir) for pdf_path in pdf_paths]
+    """Converts each PDF, continuing past any single failure (a broken PDF
+    shouldn't stop the rest of the batch)."""
+    results = []
+    for pdf_path in pdf_paths:
+        try:
+            results.append(convert_pdf(pdf_path, markdown_dir))
+        except Exception as exc:
+            print(f"  WARN: could not convert {pdf_path.name}: {exc}")
+    return results
 
 
 if __name__ == "__main__":

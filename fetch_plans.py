@@ -90,9 +90,17 @@ def download_pdf(entry: dict, download_dir: Path = DOWNLOAD_DIR) -> Path:
 
 
 def fetch_all(download_dir: Path = DOWNLOAD_DIR) -> list[Path]:
-    """Fetches all Wochenplan PDFs not already present locally."""
+    """Fetches all Wochenplan PDFs not already present locally, continuing past
+    any single download failure so one bad file doesn't hide the other weeks.
+    Warns loudly per failure so a missing week is never silent."""
     pdfs = list_wochenplan_pdfs()
-    return [download_pdf(entry, download_dir) for entry in pdfs]
+    paths = []
+    for entry in pdfs:
+        try:
+            paths.append(download_pdf(entry, download_dir))
+        except Exception as exc:
+            print(f"  WARN: could not download {entry.get('filename', '?')}: {exc}")
+    return paths
 
 
 if __name__ == "__main__":

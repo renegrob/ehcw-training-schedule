@@ -24,8 +24,9 @@ coach/bus and is normalised to "Bus".
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
-from parse_plan import WEEKDAYS, Cell, DayCells, WeekPlan
+from parse_plan import WEEKDAYS, Cell, DayCells, WeekPlan, parse_week
 
 # Games list only a start time; assume this duration for their end time.
 DEFAULT_GAME_MINUTES = 90
@@ -80,6 +81,8 @@ class Event:
     transport: str
     summary: str
     all_day: bool = False
+    is_game: bool = False  # games are tentative (a heads-up), not confirmed
+    is_error: bool = False  # a fail-loud marker, not a real training/game
     notes: list[str] = field(default_factory=list)
 
 
@@ -162,6 +165,7 @@ def _make_event(
     summary_format: str,
     team: str,
     notes: list[str],
+    is_game: bool = False,
 ) -> Event:
     all_day = start is None
     if start and not end:
@@ -191,6 +195,7 @@ def _make_event(
         transport=transport,
         summary=summary,
         all_day=all_day,
+        is_game=is_game,
         notes=notes,
     )
 
@@ -223,7 +228,8 @@ def _second_session(
 
 
 def _build_day_events(
-    source: str, weekday: str, cells: DayCells, summary_format: str, team: str
+    source: str, weekday: str, cells: DayCells, summary_format: str,
+    game_summary_format: str, team: str,
 ) -> list[Event]:
     if not (cells.halle.art or cells.feld.art or cells.away.art):
         return []  # completely empty day
@@ -282,12 +288,15 @@ def _build_day_events(
     garderobe = _combine_garderobe(cells.halle.g, feld_g, cells.away.g)
     transport = _normalise_transport(cells.halle.trsp, feld_trsp, cells.away.trsp)
 
+    # Games are tentative (participation isn't confirmed), so they get their
+    # own heads-up template.
+    fmt = game_summary_format if is_game else summary_format
     events = [
         _make_event(
             source, weekday, cells.day_date, type_label, type_full, place, opponent,
             _fmt_time(timed.start) if timed else None,
             _fmt_time(timed.end) if timed else None,
-            garderobe, transport, summary_format, team, notes,
+            garderobe, transport, fmt, team, notes, is_game=is_game,
         )
     ]
     if second is not None:
@@ -342,28 +351,125 @@ def _forder_events(
     return events
 
 
-def extract_events(week: WeekPlan, config: dict) -> list[Event]:
-    """Extracts events for the configured team out of one week's plan."""
-    team = config["team"]
-    if team not in week.teams:
-        return []
+def _error_event(source: str, day_date: date | None, message: str) -> Event:
+    """A loud, all-day marker so a parse/extract failure is *seen* on the
+    calendar rather than silently swallowed - better a false alarm than a
+    missed training or game."""
+    return Event(
+        source=source,
+        day_date=day_date or date.today(),
+        weekday="",
+        type="FEHLER",
+        type_full="Fehler",
+        place="",
+        opponent="",
+        time_start=None,
+        time_end=None,
+        garderobe="",
+        transport="",
+        summary=f"⚠️ FEHLER {source}: {message}",
+        all_day=True,
+        is_error=True,
+        notes=[message],
+    )
 
+
+def _cells_dump(cells: DayCells) -> str:
+    return (
+        f"Halle={cells.halle.art!r} Feld={cells.feld.art!r} Away={cells.away.art!r}"
+    )
+
+
+def extract_events(week: WeekPlan, config: dict) -> list[Event]:
+    """Extracts events for the configured team out of one week's plan.
+
+    Never raises and never silently drops a day: a day that blows up (or a
+    team row that has content but yields nothing) produces an error marker
+    event instead."""
+    team = config["team"]
     team_slug = team.replace(" ", "-")
     source = f"{week.source_name}/{team_slug}"
     summary_format = config.get("summary_format", "{type} {place} {time}")
+    # Games are a tentative heads-up; default to the training template if the
+    # config doesn't set a distinct one.
+    game_summary_format = config.get("game_summary_format", summary_format)
+
+    week_date = next((d for d in week.dates if d), None)
+
+    if team not in week.teams:
+        found = ", ".join(week.teams) or "keine"
+        return [
+            _error_event(
+                source, week_date,
+                f"Team {team!r} nicht im Plan gefunden (erkannte Teams: {found})",
+            )
+        ]
 
     events: list[Event] = []
     for day, cells in sorted(week.teams[team].items()):
         if cells.day_date is None:
             continue
-        events.extend(
-            _build_day_events(source, WEEKDAYS[day], cells, summary_format, team)
-        )
+        try:
+            day_events = _build_day_events(
+                source, WEEKDAYS[day], cells, summary_format,
+                game_summary_format, team,
+            )
+        except Exception as exc:  # never lose the rest of the week over one day
+            day_events = [
+                _error_event(
+                    source, cells.day_date,
+                    f"{WEEKDAYS[day]} nicht lesbar: {exc} | {_cells_dump(cells)}",
+                )
+            ]
+        # A day with content must yield at least one event.
+        if not day_events and (cells.halle.art or cells.feld.art or cells.away.art):
+            day_events = [
+                _error_event(
+                    source, cells.day_date,
+                    f"{WEEKDAYS[day]}: Einträge vorhanden, aber kein Termin erkannt "
+                    f"| {_cells_dump(cells)}",
+                )
+            ]
+        events.extend(day_events)
 
     # Fördertrainings aimed at this team's whole age group (e.g. "U14/U16").
     age_group = _age_group(team)
     if age_group:
-        events.extend(_forder_events(week, source, summary_format, team, age_group))
+        try:
+            events.extend(
+                _forder_events(week, source, summary_format, team, age_group)
+            )
+        except Exception as exc:
+            events.append(
+                _error_event(source, week_date, f"Fördertraining nicht lesbar: {exc}")
+            )
 
     events.sort(key=lambda e: (e.day_date, e.time_start or ""))
+    return events
+
+
+def safe_extract(pdf_path: str | Path, config: dict) -> list[Event]:
+    """Parse a Wochenplan PDF and extract one team's events, converting *any*
+    failure into a visible error event. This is the entry point callers should
+    use so that a broken/renamed/reformatted PDF never yields zero events
+    unnoticed."""
+    name = Path(pdf_path).name
+    team_slug = config.get("team", "?").replace(" ", "-")
+    source = f"{name}/{team_slug}"
+
+    try:
+        week = parse_week(pdf_path)
+    except Exception as exc:
+        return [_error_event(source, None, f"PDF nicht lesbar: {exc}")]
+
+    events: list[Event] = []
+    if not any(d for d in week.dates):
+        events.append(_error_event(source, None, "Keine Datumszeile im Plan gefunden"))
+
+    try:
+        events.extend(extract_events(week, config))
+    except Exception as exc:  # defence in depth - extract_events shouldn't raise
+        week_date = next((d for d in week.dates if d), None)
+        events.append(_error_event(source, week_date, f"Extraktion fehlgeschlagen: {exc}"))
+
     return events
