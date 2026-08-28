@@ -6,6 +6,7 @@ with the target calendars).
 
 import json
 import os
+from datetime import date, datetime
 
 import boto3
 from google.oauth2 import service_account
@@ -26,3 +27,43 @@ def get_calendar_service():
         info, scopes=["https://www.googleapis.com/auth/calendar"]
     )
     return build("calendar", "v3", credentials=creds, cache_discovery=False)
+
+
+def _parse_edge(edge: dict) -> datetime:
+    """A Google event start/end is either {"dateTime": ...} or {"date": ...}."""
+    if "dateTime" in edge:
+        # Drop tz-awareness so it compares with the naive PDF event datetimes.
+        return datetime.fromisoformat(edge["dateTime"]).replace(tzinfo=None)
+    return datetime.combine(date.fromisoformat(edge["date"]), datetime.min.time())
+
+
+def list_event_intervals(
+    service, calendar_id: str, uid_prefix: str, time_min: datetime, time_max: datetime
+) -> list[tuple[datetime, datetime]]:
+    """Returns (start, end) intervals of events on `calendar_id` whose iCalUID
+    starts with `uid_prefix` (e.g. the myice "mih-ehc-" feed), within the given
+    window. Used to detect overlaps with PDF-derived events."""
+    intervals: list[tuple[datetime, datetime]] = []
+    page_token = None
+    while True:
+        resp = (
+            service.events()
+            .list(
+                calendarId=calendar_id,
+                timeMin=time_min.isoformat() + "Z",
+                timeMax=time_max.isoformat() + "Z",
+                singleEvents=True,
+                showDeleted=False,
+                maxResults=2500,
+                pageToken=page_token,
+            )
+            .execute()
+        )
+        for event in resp.get("items", []):
+            if not event.get("iCalUID", "").startswith(uid_prefix):
+                continue
+            intervals.append((_parse_edge(event["start"]), _parse_edge(event["end"])))
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+    return intervals

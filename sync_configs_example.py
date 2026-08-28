@@ -30,6 +30,14 @@ Fields:
                     1 Lavender, 2 Sage, 3 Grape, 4 Flamingo, 5 Banana,
                     6 Tangerine, 7 Peacock, 8 Graphite, 9 Blueberry,
                     10 Basil, 11 Tomato
+  mih_overlap      (default: "KEEP") - what to do with a PDF event that
+                    overlaps an existing myice event (uid_prefix "mih-ehc-")
+                    already on the calendar. The myice entry is authoritative:
+                      REMOVE  drop the PDF event
+                      KEEP    keep both
+                      SHADOW  keep the PDF event but recolour it Graphite (8)
+  mih_uid_prefix   (default: "mih-ehc-") - iCalUID prefix identifying the
+                    myice events to check overlaps against.
 """
 
 CONFIGS = [
@@ -40,5 +48,6 @@ CONFIGS = [
         "summary_format": "🏒 EHC {type} {place} {time}",
         "game_summary_format": "❓ EHC {type} vs {opponent} {time} (Aufgebot?)",
         "color_id": "11",
+        "mih_overlap": "SHADOW",  # REMOVE | KEEP | SHADOW
     },
 ]

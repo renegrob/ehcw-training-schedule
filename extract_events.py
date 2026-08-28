@@ -83,7 +83,28 @@ class Event:
     all_day: bool = False
     is_game: bool = False  # games are tentative (a heads-up), not confirmed
     is_error: bool = False  # a fail-loud marker, not a real training/game
+    color_id: str | None = None  # per-event colour override (else config default)
     notes: list[str] = field(default_factory=list)
+
+    def start_datetime(self) -> datetime:
+        """Interval start. All-day events span the whole day (00:00)."""
+        if self.all_day or not self.time_start:
+            return datetime.combine(self.day_date, datetime.min.time())
+        h, m = self.time_start.split(":")
+        return datetime.combine(self.day_date, datetime.min.time()).replace(
+            hour=int(h), minute=int(m)
+        )
+
+    def end_datetime(self) -> datetime:
+        """Interval end. All-day events span to the next midnight."""
+        if self.all_day or not self.time_end:
+            return datetime.combine(self.day_date, datetime.min.time()) + timedelta(
+                days=1
+            )
+        h, m = self.time_end.split(":")
+        return datetime.combine(self.day_date, datetime.min.time()).replace(
+            hour=int(h), minute=int(m)
+        )
 
 
 def _fmt_time(raw: str | None) -> str | None:
