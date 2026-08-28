@@ -17,7 +17,7 @@ import argparse
 import hashlib
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from extract_events import Event, safe_extract
@@ -111,6 +111,18 @@ def _is_past(event: Event, tzname: str) -> bool:
     return event.end_datetime() < now
 
 
+def _existing_is_past(existing_event: dict, tzname: str) -> bool:
+    """Whether an event already on the calendar has already ended."""
+    end = existing_event.get("end", {})
+    if "dateTime" in end:
+        ended = datetime.fromisoformat(end["dateTime"]).replace(tzinfo=None)
+    elif "date" in end:
+        ended = datetime.combine(date.fromisoformat(end["date"]), datetime.min.time())
+    else:
+        return False
+    return ended < datetime.now(ZoneInfo(tzname)).replace(tzinfo=None)
+
+
 # ---------------------------------------------------------------------------
 # Reconciliation (create / update / delete)
 # ---------------------------------------------------------------------------
@@ -145,12 +157,12 @@ def _unchanged(existing_event: dict, body: dict) -> bool:
     return all(existing_event.get(f) == body.get(f) for f in _COMPARE_FIELDS)
 
 
-def reconcile(service, calendar_id, uid_prefix, pairs, dry_run: bool) -> dict:
+def reconcile(service, calendar_id, uid_prefix, pairs, tzname, dry_run: bool) -> dict:
     """pairs: list of (uid, body|None). None body = skipped-past event that
     should still count as 'current' so it isn't deleted."""
     existing = list_existing(service, calendar_id, uid_prefix)
     current_uids = set()
-    created = updated = unchanged = skipped_past = deleted = 0
+    created = updated = unchanged = skipped_past = deleted = kept_past = 0
 
     for uid, body in pairs:
         current_uids.add(uid)
@@ -171,6 +183,11 @@ def reconcile(service, calendar_id, uid_prefix, pairs, dry_run: bool) -> dict:
 
     for uid, existing_event in existing.items():
         if uid not in current_uids:
+            # Past events are historical - never delete them, even if their
+            # plan has aged out of the download set.
+            if _existing_is_past(existing_event, tzname):
+                kept_past += 1
+                continue
             if not dry_run:
                 service.events().delete(calendarId=calendar_id, eventId=existing_event["id"]).execute(num_retries=3)
             deleted += 1
@@ -181,6 +198,7 @@ def reconcile(service, calendar_id, uid_prefix, pairs, dry_run: bool) -> dict:
         "unchanged": unchanged,
         "deleted": deleted,
         "skipped_past": skipped_past,
+        "kept_past": kept_past,
         "total": len(current_uids),
     }
 
@@ -225,7 +243,9 @@ def sync_team(service, config: dict, pdfs, dry_run: bool) -> dict:
         else:
             pairs.append((_uid(event, uid_prefix), event_to_body(event, config, uid_prefix)))
 
-    result = reconcile(service, config["calendar_id"], uid_prefix, pairs, dry_run)
+    result = reconcile(
+        service, config["calendar_id"], uid_prefix, pairs, tzname, dry_run
+    )
     result["team"] = config["team"]
     result["errors"] = sum(1 for e in events if e.is_error)
     return result
