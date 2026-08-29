@@ -83,6 +83,12 @@ class Event:
     all_day: bool = False
     is_game: bool = False  # games are tentative (a heads-up), not confirmed
     is_error: bool = False  # a fail-loud marker, not a real training/game
+    # A myice booking may later replace this event (regular team-row trainings
+    # and games): such events are marked tentative and are dropped when a myice
+    # entry already overlaps them. Förder trainings, free-skates and error
+    # markers are NOT replaceable - myice never carries them, so they stay
+    # confirmed and survive overlap resolution untouched.
+    myice_replaceable: bool = True
     color_id: str | None = None  # per-event colour override (else config default)
     notes: list[str] = field(default_factory=list)
 
@@ -187,6 +193,7 @@ def _make_event(
     team: str,
     notes: list[str],
     is_game: bool = False,
+    myice_replaceable: bool = True,
 ) -> Event:
     all_day = start is None
     if start and not end:
@@ -217,6 +224,7 @@ def _make_event(
         summary=summary,
         all_day=all_day,
         is_game=is_game,
+        myice_replaceable=myice_replaceable,
         notes=notes,
     )
 
@@ -240,11 +248,14 @@ def _second_session(
 
     type_full = TYPE_MAP.get(feld.type_code, name) if feld.type_code else name
     type_label = feld.type_code or name
+    # A coded second training (e.g. an afternoon "ET 1300-1430") can be on myice
+    # and so is replaceable; a named extra like "freies Chneblä" is EHC-only and
+    # stays put.
     return _make_event(
         source, weekday, cells.day_date, type_label, type_full, "", "",
         _fmt_time(start), _fmt_time(end),
         _combine_garderobe(cells.feld.g), _normalise_transport(cells.feld.trsp),
-        summary_format, team, [],
+        summary_format, team, [], myice_replaceable=feld.type_code is not None,
     )
 
 
@@ -366,7 +377,7 @@ def _forder_events(
                     source, WEEKDAYS[day], cells.day_date, type_label, type_full,
                     "", "", _fmt_time(halle.start), _fmt_time(halle.end),
                     garderobe, _normalise_transport(cells.halle.trsp),
-                    summary_format, team, notes,
+                    summary_format, team, notes, myice_replaceable=False,
                 )
             )
     return events
@@ -391,6 +402,7 @@ def _error_event(source: str, day_date: date | None, message: str) -> Event:
         summary=f"⚠️ FEHLER {source}: {message}",
         all_day=True,
         is_error=True,
+        myice_replaceable=False,
         notes=[message],
     )
 

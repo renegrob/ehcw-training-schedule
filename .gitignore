@@ -3,6 +3,7 @@ markdown/
 events.txt
 events.json
 sync_configs.py
+sync-state.json
 .venv/
 .env
 __pycache__/

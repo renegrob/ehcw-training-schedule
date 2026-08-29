@@ -91,6 +91,32 @@ past events are left alone (they are never created, updated, or deleted). A
 parse/extract failure becomes a loud all-day error event rather than a silent
 gap.
 
+Regular team-row trainings and games are the ones the myice feed can replace
+(myice lags the plan but has no gaps), so they are written as **tentative** and
+are dropped when a myice event already overlaps them (per `mih_overlap`). Förder
+trainings and free-skates are never on myice, so they stay **confirmed** and a
+time collision there is ignored.
+
+### Cancelling events
+
+Two ways, both survive re-runs:
+
+- **Delete it in Google Calendar.** The sync records what it created in a
+  gitignored `sync-state.json`. On the next `--apply` it notices that an event
+  it previously synced — still in the plan — has vanished from the calendar,
+  concludes you cancelled it, and tombstones it so it is never re-added. This is
+  the no-list way: Google Calendar is the control surface. (Deletion is detected
+  by *absence*, so it does not depend on Google keeping deleted-event
+  tombstones. To un-cancel, remove the uid from `sync-state.json`'s
+  `tombstones`.) Detection needs a real `--apply` run to persist state. The
+  state lives at `SYNC_STATE_URI` — a local path by default, or an
+  `s3://bucket/key` on Lambda (where the local filesystem is ephemeral, so S3
+  is the only place it survives between invocations; the Lambda role then needs
+  `s3:GetObject`/`s3:PutObject` on that key).
+- **List them up front** via a team's `cancellations` in `sync_configs.py` —
+  handy for a whole week away (`{"from": ..., "to": ...}`). See
+  `sync_configs_example.py` / `cancellations.py`.
+
 The service-account key is read from AWS SSM by default, or from a local
 `.google-service-account.json` (gitignored) if present — so `sync.py` needs
 either AWS credentials that can read the secret, or that local key file.
@@ -98,15 +124,15 @@ either AWS credentials that can read the secret, or that local key file.
 ### Local test runs
 
 ```bash
-bash run-local.sh            # fetch latest PDFs, then dry-run (writes nothing)
-bash run-local.sh --apply    # actually create/update events
-bash run-local.sh list       # fetch, then write the event preview to events.txt
-SKIP_FETCH=1 bash run-local.sh   # sync what's already downloaded
+./run-local.sh            # fetch latest PDFs, then dry-run (writes nothing)
+./run-local.sh --apply    # actually create/update events
+./run-local.sh --list     # fetch, then write the event preview to events.txt
+./run-local.sh --help     # show usage
+SKIP_FETCH=1 ./run-local.sh   # sync what's already downloaded
 ```
 
 The sync modes use the local `.google-service-account.json`, so no AWS access
-is needed; `list` needs no key at all (it never touches Google Calendar). Run
-it as `bash run-local.sh` (this directory is a `noexec` mount).
+is needed; `--list` needs no key at all (it never touches Google Calendar).
 
 ## Google Calendar secret
 

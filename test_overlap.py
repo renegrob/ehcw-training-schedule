@@ -7,7 +7,9 @@ from extract_events import Event
 from overlap import KEEP, REMOVE, SHADOW, resolve_mih_overlap, validate_policy
 
 
-def make_event(start="14:30", end="16:00", is_error=False, all_day=False):
+def make_event(
+    start="14:30", end="16:00", is_error=False, all_day=False, myice_replaceable=True
+):
     return Event(
         source="Wochenplan-39.pdf/U14-A",
         day_date=date(2026, 9, 26),
@@ -23,6 +25,7 @@ def make_event(start="14:30", end="16:00", is_error=False, all_day=False):
         summary="game",
         all_day=all_day,
         is_error=is_error,
+        myice_replaceable=myice_replaceable,
     )
 
 
@@ -67,6 +70,15 @@ class ResolveOverlapTest(unittest.TestCase):
         err = make_event(is_error=True)
         out = resolve_mih_overlap([err], OVERLAP, REMOVE)
         self.assertEqual(out, [err])
+
+    def test_non_replaceable_survives_overlap(self):
+        # Förder trainings / free-skates are not on myice: an overlap is a
+        # coincidence, so REMOVE must leave them in place.
+        keep = make_event(myice_replaceable=False)
+        self.assertEqual(resolve_mih_overlap([keep], OVERLAP, REMOVE), [keep])
+        # SHADOW must not recolour them either.
+        out = resolve_mih_overlap([make_event(myice_replaceable=False)], OVERLAP, SHADOW)
+        self.assertIsNone(out[0].color_id)
 
     def test_no_intervals_is_noop(self):
         events = [make_event()]

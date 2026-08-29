@@ -36,8 +36,24 @@ Fields:
                       REMOVE  drop the PDF event
                       KEEP    keep both
                       SHADOW  keep the PDF event but recolour it Graphite (8)
+                    Only applies to events myice can replace (regular team
+                    trainings and games). Förder trainings and free-skates are
+                    never on myice, so a time collision there is ignored and
+                    they always stay. Regardless of this policy, every
+                    myice-replaceable event is written as *tentative* (the myice
+                    feed lags the plan but has no gaps, so it will supersede
+                    them); Förder trainings and free-skates stay *confirmed*.
   mih_uid_prefix   (default: "mih-ehc-") - iCalUID prefix identifying the
                     myice events to check overlaps against.
+  cancellations    (optional) - list of events to suppress up front, so a
+                    training you cancelled is deleted and never re-added on the
+                    next --apply. Each entry scopes a single "date" or an
+                    inclusive "from"/"to" range (good for a week away), narrowed
+                    by an optional "time" (start "HH:MM") and/or "type" (activity
+                    code). See cancellations.py. You can also just delete an
+                    event in Google Calendar - the sync remembers it and won't
+                    re-add it (see sync_state.py); this list is for pre-emptive
+                    or bulk cancellations.
 """
 
 CONFIGS = [
@@ -48,6 +64,11 @@ CONFIGS = [
         "summary_format": "🏒 EHC {type} {place} {time}",
         "game_summary_format": "❓ EHC {type} vs {opponent} {time} (Aufgebot?)",
         "color_id": "11",
-        "mih_overlap": "SHADOW",  # REMOVE | KEEP | SHADOW
+        "mih_overlap": "REMOVE",  # REMOVE | KEEP | SHADOW
+        "cancellations": [
+            # {"date": "2026-09-02"},                  # cancel the whole day
+            # {"date": "2026-09-25", "time": "16:15"}, # cancel one session
+            # {"from": "2026-12-22", "to": "2026-12-28"},  # a week away
+        ],
     },
 ]

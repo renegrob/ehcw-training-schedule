@@ -11,7 +11,9 @@ event is configurable per team via the "mih_overlap" config key:
   SHADOW  keep the PDF event but recolour it (Graphite, colorId 8) so it reads
           as a secondary/shadow copy
 
-Error events are never touched - a fail-loud marker must always survive.
+Error events are never touched - a fail-loud marker must always survive. Nor
+are events myice never carries (Förder trainings, free-skates): those have
+Event.myice_replaceable=False and pass through regardless of the policy.
 """
 
 from datetime import datetime
@@ -58,7 +60,10 @@ def resolve_mih_overlap(
 
     resolved: list[Event] = []
     for event in events:
-        if event.is_error:
+        # Error markers must always survive, and Förder trainings / free-skates
+        # (myice_replaceable=False) are never on the myice feed, so a time
+        # collision there is a coincidence, not a duplicate - leave them be.
+        if event.is_error or not event.myice_replaceable:
             resolved.append(event)
             continue
 
