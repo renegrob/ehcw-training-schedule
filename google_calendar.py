@@ -50,11 +50,20 @@ def _parse_edge(edge: dict) -> datetime:
 
 
 def list_event_intervals(
-    service, calendar_id: str, uid_prefix: str, time_min: datetime, time_max: datetime
+    service,
+    calendar_id: str,
+    uid_prefix: str,
+    time_min: datetime,
+    time_max: datetime,
+    exclude_prefix: str | None = None,
 ) -> list[tuple[datetime, datetime]]:
     """Returns (start, end) intervals of events on `calendar_id` whose iCalUID
-    starts with `uid_prefix` (e.g. the myice "mih-ehc-" feed), within the given
-    window. Used to detect overlaps with PDF-derived events."""
+    starts with `uid_prefix` (e.g. the myice feed), within the given window.
+    Used to detect overlaps with PDF-derived events.
+
+    `exclude_prefix` drops events whose iCalUID starts with it - needed when the
+    myice prefix is itself a prefix of our own events' prefix (e.g. myice "ehc-"
+    vs our "ehc-wp-"), so we never mistake our own events for myice ones."""
     intervals: list[tuple[datetime, datetime]] = []
     page_token = None
     while True:
@@ -72,7 +81,10 @@ def list_event_intervals(
             .execute()
         )
         for event in resp.get("items", []):
-            if not event.get("iCalUID", "").startswith(uid_prefix):
+            uid = event.get("iCalUID", "")
+            if not uid.startswith(uid_prefix):
+                continue
+            if exclude_prefix and uid.startswith(exclude_prefix):
                 continue
             intervals.append((_parse_edge(event["start"]), _parse_edge(event["end"])))
         page_token = resp.get("nextPageToken")

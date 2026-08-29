@@ -262,12 +262,17 @@ def reconcile(
 def _mih_intervals(service, config, events):
     """Busy intervals of existing myice events overlapping the plan window."""
     prefix = config.get("mih_uid_prefix", DEFAULT_MIH_UID_PREFIX)
+    # If our own prefix sits under the myice prefix (e.g. myice "ehc-" vs our
+    # "ehc-wp-"), exclude our own events so we don't treat them as myice.
+    own_prefix = config.get("uid_prefix", "ehc-")
+    exclude = own_prefix if own_prefix != prefix and own_prefix.startswith(prefix) else None
     starts = [e.start_datetime() for e in events]
     ends = [e.end_datetime() for e in events]
     if not starts:
         return []
     return list_event_intervals(
-        service, config["calendar_id"], prefix, min(starts), max(ends)
+        service, config["calendar_id"], prefix, min(starts), max(ends),
+        exclude_prefix=exclude,
     )
 
 

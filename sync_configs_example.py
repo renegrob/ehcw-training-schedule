@@ -44,7 +44,10 @@ Fields:
                     feed lags the plan but has no gaps, so it will supersede
                     them); Förder trainings and free-skates stay *confirmed*.
   mih_uid_prefix   (default: "mih-ehc-") - iCalUID prefix identifying the
-                    myice events to check overlaps against.
+                    myice events to check overlaps against. If this is itself a
+                    prefix of your own uid_prefix (e.g. myice "ehc-" vs your
+                    "ehc-wp-"), your own events are automatically excluded, so
+                    they are never mistaken for myice ones.
   cancellations    (optional) - list of events to suppress up front, so a
                     training you cancelled is deleted and never re-added on the
                     next --apply. Each entry scopes a single "date" or an
