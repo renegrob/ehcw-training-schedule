@@ -8,12 +8,15 @@ modified) and was verified to be more reliable than scraping the
 """
 
 import re
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 
 MEDIA_API_URL = "https://ehc-winterthur.ch/wp-json/wp/v2/media"
 DOWNLOAD_DIR = Path(__file__).parent / "downloads"
+TIMEZONE = ZoneInfo("Europe/Zurich")
 
 # Matches the week number out of filenames like "Wochenplan-34.pdf",
 # "Wochenplan-34_NEU.pdf", "Wochenplan-34_Neu_1.pdf".
@@ -51,10 +54,12 @@ def latest_local_pdfs(download_dir: Path = DOWNLOAD_DIR) -> list[Path]:
 
 
 def list_wochenplan_pdfs() -> list[dict]:
-    """Returns the latest media entry per week's Wochenplan PDF, newest first.
+    """Returns the latest media entry per Wochenplan week, newest first,
+    restricted to the current and future weeks.
 
-    Older revisions of the same week (superseded filenames) are dropped -
-    only the most recently modified entry per week number is kept.
+    Past weeks are skipped (their events wouldn't be synced anyway), and older
+    revisions of the same week (superseded filenames) are dropped - only the
+    most recently modified entry per week number is kept.
     """
     entries = []
     page = 1
@@ -81,8 +86,12 @@ def list_wochenplan_pdfs() -> list[dict]:
 
     pdfs = [e for e in entries if e.get("mime_type") == "application/pdf"]
 
+    today = datetime.now(TIMEZONE).date()
     latest_per_week: dict[str, dict] = {}
     for entry in pdfs:
+        match = WEEK_NUMBER_RE.match(entry["filename"])
+        if match and not _week_is_current_or_future(int(match.group(1)), today):
+            continue  # skip weeks that have already passed
         key = _week_key(entry)
         current = latest_per_week.get(key)
         if current is None or entry["modified"] > current["modified"]:
@@ -93,11 +102,34 @@ def list_wochenplan_pdfs() -> list[dict]:
     return result
 
 
+def _week_is_current_or_future(week_num: int, today: date) -> bool:
+    """Whether ISO week `week_num` is the current week or a future one.
+
+    The filename only carries the week number, which restarts at 1 each new
+    year, so week 2 in December means *next* January. Resolve the week to its
+    occurrence nearest today (checking the previous/current/next year), then
+    keep it if that week hasn't fully passed."""
+    iso = today.isocalendar()
+    current_monday = date.fromisocalendar(iso[0], iso[1], 1)
+
+    candidates = []
+    for year in (today.year - 1, today.year, today.year + 1):
+        try:
+            candidates.append(date.fromisocalendar(year, week_num, 1))
+        except ValueError:
+            pass  # e.g. week 53 in a year that only has 52
+    if not candidates:
+        return True  # unparseable - keep rather than risk dropping a real week
+
+    resolved_monday = min(candidates, key=lambda d: abs((d - current_monday).days))
+    return resolved_monday + timedelta(days=6) >= today  # Sunday not before today
+
+
 def download_pdf(entry: dict, download_dir: Path = DOWNLOAD_DIR) -> Path:
-    """Downloads a single media entry's PDF, skipping it if already present."""
+    """Downloads a media entry's PDF, skipping it if already present (relevant
+    only for local runs; on Lambda nothing persists between invocations)."""
     download_dir.mkdir(parents=True, exist_ok=True)
-    filename = entry["filename"]
-    dest = download_dir / filename
+    dest = download_dir / entry["filename"]
     if dest.exists():
         return dest
 
@@ -108,9 +140,10 @@ def download_pdf(entry: dict, download_dir: Path = DOWNLOAD_DIR) -> Path:
 
 
 def fetch_all(download_dir: Path = DOWNLOAD_DIR) -> list[Path]:
-    """Fetches all Wochenplan PDFs not already present locally, continuing past
-    any single download failure so one bad file doesn't hide the other weeks.
-    Warns loudly per failure so a missing week is never silent."""
+    """Fetches the latest Wochenplan PDFs, downloading only those missing or
+    newer than the local copy, continuing past any single download failure so
+    one bad file doesn't hide the other weeks. Warns loudly per failure so a
+    missing week is never silent."""
     pdfs = list_wochenplan_pdfs()
     paths = []
     for entry in pdfs:

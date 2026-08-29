@@ -7,15 +7,27 @@ with the target calendars).
 import json
 import os
 from datetime import date, datetime
+from pathlib import Path
 
-import boto3
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 SSM_PARAM_NAME = os.environ.get("SSM_PARAM_NAME", "/ical-sync/google-service-account")
+# For local test runs: a service-account JSON key on disk is used if present,
+# so no AWS access is needed. Defaults to a gitignored file in the project root.
+SERVICE_ACCOUNT_FILE = os.environ.get(
+    "GOOGLE_SERVICE_ACCOUNT_FILE",
+    str(Path(__file__).parent / ".google-service-account.json"),
+)
 
 
 def get_service_account_info() -> dict:
+    path = Path(SERVICE_ACCOUNT_FILE)
+    if path.is_file():
+        return json.loads(path.read_text())
+    # Fall back to AWS SSM Parameter Store (how the deployed job reads it).
+    import boto3
+
     ssm = boto3.client("ssm")
     resp = ssm.get_parameter(Name=SSM_PARAM_NAME, WithDecryption=True)
     return json.loads(resp["Parameter"]["Value"])

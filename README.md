@@ -29,6 +29,12 @@ uv sync
 cp env.example .env   # then edit SSM_PARAM_NAME / AWS_REGION if needed
 ```
 
+Run the tests with:
+
+```bash
+uv run python -m unittest discover -s . -p "test_*.py"
+```
+
 ## Run
 
 ```bash
@@ -81,9 +87,26 @@ Each event is upserted via `events.import()` keyed on a namespaced `iCalUID`
 (so re-runs never duplicate), tagged with a private `source=ehcw-trainings`
 property so reconciliation only ever touches events *this* project created —
 never the myice (`mih-ehc-`) ones. Events removed from the plans are deleted;
-past events are left alone (`SKIP_PAST_EVENTS=false` to include them). A
+past events are left alone (they are never created, updated, or deleted). A
 parse/extract failure becomes a loud all-day error event rather than a silent
-gap. Requires AWS credentials that can read the service-account secret.
+gap.
+
+The service-account key is read from AWS SSM by default, or from a local
+`.google-service-account.json` (gitignored) if present — so `sync.py` needs
+either AWS credentials that can read the secret, or that local key file.
+
+### Local test runs
+
+```bash
+bash run-local.sh            # fetch latest PDFs, then dry-run (writes nothing)
+bash run-local.sh --apply    # actually create/update events
+bash run-local.sh list       # fetch, then write the event preview to events.txt
+SKIP_FETCH=1 bash run-local.sh   # sync what's already downloaded
+```
+
+The sync modes use the local `.google-service-account.json`, so no AWS access
+is needed; `list` needs no key at all (it never touches Google Calendar). Run
+it as `bash run-local.sh` (this directory is a `noexec` mount).
 
 ## Google Calendar secret
 

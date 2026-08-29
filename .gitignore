@@ -7,3 +7,4 @@ sync_configs.py
 .env
 __pycache__/
 *.pyc
+/.google-service-account.json
