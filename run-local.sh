@@ -1,31 +1,47 @@
 #!/usr/bin/env bash
 #
-# Run the Wochenplan tooling locally, using a local service-account key
-# instead of AWS SSM.
-#
-#   bash run-local.sh              # fetch latest PDFs, then DRY-RUN sync (writes nothing)
-#   bash run-local.sh --apply      # fetch, then actually create/update events
-#   bash run-local.sh list         # fetch, then write the event preview to events.txt
-#   SKIP_FETCH=1 bash run-local.sh # skip the download step, use what's on disk
-#
-# Invoke it with `bash run-local.sh` - this directory is a noexec mount, so
-# executing it directly (./run-local.sh) is blocked.
-#
-# The service-account JSON is read from .google-service-account.json in this
-# directory (gitignored), or from $GOOGLE_SERVICE_ACCOUNT_FILE if set. The
-# `list` mode needs no key (it never touches Google Calendar).
+# Run the Wochenplan tooling locally, reading the Google service-account key
+# from a local file instead of AWS SSM. See --help for usage.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-MODE="sync"
-if [[ "${1:-}" == "list" || "${1:-}" == "--list" ]]; then
-  MODE="list"
-  shift
-fi
+usage() {
+  cat <<'USAGE'
+Run the Wochenplan tooling locally, using a local service-account key
+instead of AWS SSM.
 
-# This project directory is a noexec mount that breaks mmap-loading of compiled
-# .so files, so the venv must live on a normal filesystem.
+Usage:
+  ./run-local.sh            Fetch latest PDFs, then a DRY-RUN sync (writes nothing)
+  ./run-local.sh --apply    Fetch, then actually create/update calendar events
+  ./run-local.sh --list     Fetch, then write the event preview to events.txt
+  ./run-local.sh --help     Show this help
+
+Environment:
+  SKIP_FETCH=1                 Skip the download; use the PDFs already on disk
+  GOOGLE_SERVICE_ACCOUNT_FILE  Path to the service-account JSON
+                               (default: ./.google-service-account.json)
+
+--list needs no key (it never touches Google Calendar); the sync modes read
+the key from the file above.
+USAGE
+}
+
+MODE="sync"
+case "${1:-}" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  --list | list)
+    MODE="list"
+    shift
+    ;;
+esac
+
+# Reuse a dedicated venv outside the project tree (its original reason - a
+# noexec mount - is gone now that the project lives on ext4, but keeping it
+# avoids rebuilding the heavy venv). Override by exporting UV_PROJECT_ENVIRONMENT.
 export UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$HOME/.venvs/ehcw-trainings}"
 
 if [[ "${SKIP_FETCH:-}" != "1" ]]; then
