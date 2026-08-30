@@ -9,3 +9,4 @@ sync-state.json
 __pycache__/
 *.pyc
 /.google-service-account.json
+/.idea/

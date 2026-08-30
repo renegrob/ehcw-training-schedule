@@ -90,6 +90,11 @@ class ExtractEventsTest(unittest.TestCase):
         self.assertEqual(e.opponent, "Wetzikon")  # Feld = opponent
         self.assertEqual(e.summary, "❓ EHC ZC vs Wetzikon 14:30-16:00")
 
+    def test_away_game_when_code_in_away_cell(self):
+        # Halle holds the venue, Away holds the game code+time -> away.
+        e = self._one(date(2026, 9, 26), lambda e: e.is_game)
+        self.assertFalse(e.is_home)
+
     def test_game_default_90_minute_duration(self):
         e = self._one(date(2026, 9, 26), lambda e: e.is_game)
         self.assertEqual((e.time_start, e.time_end), ("14:30", "16:00"))
@@ -101,6 +106,45 @@ class ExtractEventsTest(unittest.TestCase):
 
     def test_no_error_events_on_clean_week(self):
         self.assertFalse(any(e.is_error for e in self.events))
+
+
+class HomeAwayGameTest(unittest.TestCase):
+    CFG = {**CONFIG, "game_summary_format": "{home_away} {type} vs {opponent} {place}"}
+
+    def _game(self, day_cells):
+        week = build_week({"U14 A": {0: day_cells}})
+        games = [e for e in extract_events(week, self.CFG) if e.is_game]
+        self.assertEqual(len(games), 1)
+        return games[0]
+
+    def test_home_game_code_in_halle(self):
+        # Halle = "FS 1715" (code+time), Feld = opponent, Away empty.
+        e = self._game(cells(0, ("FS 1715", "", ""), ("EVDN", "", ""), ("", "", "")))
+        self.assertTrue(e.is_home)
+        self.assertEqual(e.place, "")  # played at home, no away venue
+        self.assertEqual(e.summary, "🏠 FS vs EVDN")
+
+    def test_away_game_private_car_icon_from_transport(self):
+        # Halle = venue, Away = "ZC 1000" (code+time), trsp "Pw" -> private car.
+        e = self._game(cells(0, ("SLA Zürich", "", ""), ("Thalwil", "", ""), ("ZC 1000", "", "Pw")))
+        self.assertFalse(e.is_home)
+        self.assertEqual(e.place, "SLA Zürich")
+        self.assertEqual(e.summary, "🚗 ZC vs Thalwil SLA Zürich")
+
+    def test_away_game_coach_icon_for_swiss_car(self):
+        # "Car" is a coach in Swiss usage -> bus icon (normalised to "Bus").
+        e = self._game(cells(0, ("Chur", "", ""), ("Bündner", "", ""), ("MS 1400", "", "Car")))
+        self.assertEqual(e.summary, "🚌 MS vs Bündner Chur")
+
+    def test_away_game_unknown_transport_falls_back(self):
+        e = self._game(cells(0, ("Chur", "", ""), ("Bündner", "", ""), ("MS 1400", "", "")))
+        self.assertEqual(e.summary, "🚗 MS vs Bündner Chur")  # away_label fallback
+
+    def test_custom_labels_and_icons(self):
+        cfg = {**self.CFG, "home_label": "H", "transport_icons": {"pw": "AUTO"}}
+        week = build_week({"U14 A": {0: cells(0, ("Chur", "", ""), ("X", "", ""), ("MS 1400", "", "Pw"))}})
+        e = [x for x in extract_events(week, cfg) if x.is_game][0]
+        self.assertTrue(e.summary.startswith("AUTO "))
 
 
 class ErrorHandlingTest(unittest.TestCase):

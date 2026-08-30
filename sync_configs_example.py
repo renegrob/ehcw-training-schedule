@@ -19,13 +19,26 @@ Fields:
                     Placeholders: {type} (activity abbreviation, e.g. "ET"),
                     {type_full} (expanded, e.g. "Eistraining"), {place} (venue
                     for games / rink for trainings), {opponent} (games only),
+                    {home_away} (games only; see home_label/away_label),
                     {time} ("HH:MM-HH:MM", empty for all-day events),
                     {start}, {end}, {team}. Extra whitespace is collapsed, so
                     a template can list placeholders that are sometimes empty.
   game_summary_format (default: same as summary_format) - separate template
                     for games. Games are only a heads-up (a player isn't
                     necessarily called up), so give them a distinct, clearly
-                    tentative title, e.g. "❓ EHC {type} vs {opponent} {time}".
+                    tentative title. Use {home_away} to show home/away and
+                    {place} for the venue (empty for home games), e.g.
+                    "❓ {home_away} {type} EHC vs {opponent} {place} {time}".
+  home_label       (default: "🏠") - what {home_away} expands to for a home
+                    game (the game's code+time sit in the Halle cell).
+  away_label       (default: "🚗") - what {home_away} expands to for an away
+                    game whose transport is empty/unrecognised (fallback).
+  transport_icons  (default: {"pw": "🚗", "auto": "🚗", "bus": "🚌",
+                    "car": "🚌", "zug": "🚆", "bahn": "🚆"}) - for away games,
+                    {home_away} is picked from the plan's transport note (trsp)
+                    by matching these substrings case-insensitively; no match
+                    falls back to away_label. In Swiss usage "Car" is a coach,
+                    so "Pw"/"Auto" -> 🚗 (private car) but "Car"/"Bus" -> 🚌.
   color_id         (optional) - Google Calendar event color, "1" through "11":
                     1 Lavender, 2 Sage, 3 Grape, 4 Flamingo, 5 Banana,
                     6 Tangerine, 7 Peacock, 8 Graphite, 9 Blueberry,
@@ -65,7 +78,7 @@ CONFIGS = [
         "calendar_id": "primary",
         "uid_prefix": "ehc-",
         "summary_format": "🏒 EHC {type} {place} {time}",
-        "game_summary_format": "❓ EHC {type} vs {opponent} {time} (Aufgebot?)",
+        "game_summary_format": "❓ {home_away} {type} EHC vs {opponent} {place} {time} (prov.)",
         "color_id": "11",
         "mih_overlap": "REMOVE",  # REMOVE | KEEP | SHADOW
         "cancellations": [

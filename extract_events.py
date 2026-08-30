@@ -31,6 +31,16 @@ from parse_plan import WEEKDAYS, Cell, DayCells, WeekPlan, parse_week
 # Games list only a start time; assume this duration for their end time.
 DEFAULT_GAME_MINUTES = 90
 
+# {home_away} marker defaults: a house for home games, and for away games an
+# icon picked from the plan's transport note (trsp), falling back to a car.
+# In Swiss usage "Car" is a coach/bus, so it maps to the bus icon (and is also
+# normalised to "Bus" upstream); "Pw"/"Auto" is a private car.
+DEFAULT_HOME_LABEL = "🏠"
+DEFAULT_AWAY_LABEL = "🚗"
+DEFAULT_TRANSPORT_ICONS = {
+    "pw": "🚗", "auto": "🚗", "bus": "🚌", "car": "🚌", "zug": "🚆", "bahn": "🚆",
+}
+
 GAME_CODES = {"MS", "FS", "ZC", "TU", "PO"}
 
 # Activity-code -> full word. Seeded from the legend printed on each plan, but
@@ -82,6 +92,7 @@ class Event:
     summary: str
     all_day: bool = False
     is_game: bool = False  # games are tentative (a heads-up), not confirmed
+    is_home: bool = False  # games only: at our home rink vs away (code in Halle)
     is_error: bool = False  # a fail-loud marker, not a real training/game
     # A myice booking may later replace this event (regular team-row trainings
     # and games): such events are marked tentative and are dropped when a myice
@@ -123,6 +134,22 @@ def _fmt_time(raw: str | None) -> str | None:
 def _plus_minutes(hhmm: str, minutes: int) -> str:
     start = datetime.strptime(hhmm, "%H:%M")
     return (start + timedelta(minutes=minutes)).strftime("%H:%M")
+
+
+def _home_away_marker(
+    is_home: bool, transport: str, home_label: str, away_label: str,
+    transport_icons: dict[str, str],
+) -> str:
+    """Marker for a game title: `home_label` at home, otherwise an icon chosen
+    from the transport note (e.g. "Pw" -> car, "Bus" -> coach), falling back to
+    `away_label` when the transport is empty or unrecognised."""
+    if is_home:
+        return home_label
+    low = (transport or "").lower()
+    for key, icon in (transport_icons or {}).items():
+        if key in low:
+            return icon
+    return away_label
 
 
 def _parse_activity(text: str) -> ParsedActivity:
@@ -193,6 +220,10 @@ def _make_event(
     team: str,
     notes: list[str],
     is_game: bool = False,
+    is_home: bool = False,
+    home_label: str = "",
+    away_label: str = "",
+    transport_icons: dict[str, str] | None = None,
     myice_replaceable: bool = True,
 ) -> Event:
     all_day = start is None
@@ -200,13 +231,19 @@ def _make_event(
         # Games list only a start time - assume a default duration.
         end = _plus_minutes(start, DEFAULT_GAME_MINUTES)
     time = f"{start}-{end}" if start else ""
+    # Home/away is meaningful for games only; blank elsewhere so the placeholder
+    # collapses away in training titles.
+    home_away = (
+        _home_away_marker(is_home, transport, home_label, away_label, transport_icons)
+        if is_game else ""
+    )
     summary = re.sub(
         r"\s+",
         " ",
         summary_format.format(
             type=type_label, type_full=type_full, place=place,
             opponent=opponent, time=time, start=start or "", end=end or "",
-            team=team,
+            team=team, home_away=home_away,
         ),
     ).strip()
     return Event(
@@ -224,6 +261,7 @@ def _make_event(
         summary=summary,
         all_day=all_day,
         is_game=is_game,
+        is_home=is_home,
         myice_replaceable=myice_replaceable,
         notes=notes,
     )
@@ -261,7 +299,8 @@ def _second_session(
 
 def _build_day_events(
     source: str, weekday: str, cells: DayCells, summary_format: str,
-    game_summary_format: str, team: str,
+    game_summary_format: str, team: str, home_label: str = "", away_label: str = "",
+    transport_icons: dict[str, str] | None = None,
 ) -> list[Event]:
     if not (cells.halle.art or cells.feld.art or cells.away.art):
         return []  # completely empty day
@@ -272,6 +311,9 @@ def _build_day_events(
 
     type_code = halle.type_code or away.type_code
     is_game = type_code in GAME_CODES
+    # Home game: the game code+time sit in the Halle cell (played at our rink).
+    # Away game: they sit in the Away cell, and Halle holds the venue.
+    is_home = is_game and halle.type_code in GAME_CODES
     primary_from_halle = halle.start is not None
 
     # Primary time: Halle first, then Away (games put it in Away).
@@ -329,6 +371,8 @@ def _build_day_events(
             _fmt_time(timed.start) if timed else None,
             _fmt_time(timed.end) if timed else None,
             garderobe, transport, fmt, team, notes, is_game=is_game,
+            is_home=is_home, home_label=home_label, away_label=away_label,
+            transport_icons=transport_icons,
         )
     ]
     if second is not None:
@@ -426,6 +470,10 @@ def extract_events(week: WeekPlan, config: dict) -> list[Event]:
     # Games are a tentative heads-up; default to the training template if the
     # config doesn't set a distinct one.
     game_summary_format = config.get("game_summary_format", summary_format)
+    # Labels/icons for the {home_away} placeholder in game titles.
+    home_label = config.get("home_label", DEFAULT_HOME_LABEL)
+    away_label = config.get("away_label", DEFAULT_AWAY_LABEL)
+    transport_icons = config.get("transport_icons", DEFAULT_TRANSPORT_ICONS)
 
     week_date = next((d for d in week.dates if d), None)
 
@@ -445,7 +493,7 @@ def extract_events(week: WeekPlan, config: dict) -> list[Event]:
         try:
             day_events = _build_day_events(
                 source, WEEKDAYS[day], cells, summary_format,
-                game_summary_format, team,
+                game_summary_format, team, home_label, away_label, transport_icons,
             )
         except Exception as exc:  # never lose the rest of the week over one day
             day_events = [
