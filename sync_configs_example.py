@@ -70,6 +70,28 @@ Fields:
                     event in Google Calendar - the sync remembers it and won't
                     re-add it (see sync_state.py); this list is for pre-emptive
                     or bulk cancellations.
+  spielplan_mode   (default: "OPTIONAL") - how this team uses its Spielplan:
+                      IGNORE    don't use a Spielplan at all
+                      OPTIONAL  use it if present, no-op if the team has none
+                      REQUIRE   a missing Spielplan is a loud error marker (so a
+                                team that should have one never silently lacks it)
+  spielplan        (optional) - path to this team's season "Spielplan" PDF (the
+                    full-season game list). If omitted, a downloads/ file named
+                    "Spielplan <team>.pdf" is auto-detected. Unless
+                    spielplan_mode is IGNORE, its games supplement the Wochenplan
+                    (see spielplan_events.py):
+                    games on dates beyond the downloaded Wochenplan window are
+                    created as tentative "provisional" entries (using
+                    game_summary_format), and games missing from a week the
+                    Wochenplan *does* cover become a loud all-day "evtl.
+                    abgesagt" marker (probable cancellation/reschedule). The
+                    Wochenplan always wins where it has a game. Use
+                    verify_spielplan.py to preview the classification without
+                    writing anything.
+  club_name        (default: "EHC Winterthur") - the club-name substring used to
+                    tell our side from the opponent in the Spielplan's team
+                    columns (e.g. "#106189 | EHC Winterthur"). Only relevant
+                    when a Spielplan is used.
 """
 
 CONFIGS = [

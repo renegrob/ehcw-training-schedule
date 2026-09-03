@@ -1,16 +1,18 @@
 """
 Dry-run: parse every downloaded Wochenplan, extract the configured teams'
-events, and print them as text for verification. Writes the same listing to
-events.txt. No Google Calendar calls.
+events (plus the season Spielplan supplement), and print them as text for
+verification. Writes the same listing to events.txt. No Google Calendar calls.
 
 Uses safe_extract, so a broken/renamed/reformatted PDF surfaces as a visible
 ⚠️ FEHLER event rather than silently producing nothing.
 """
 
+from datetime import date
 from pathlib import Path
 
 from extract_events import Event, safe_extract
 from fetch_plans import latest_local_pdfs
+from spielplan_events import covered_dates, spielplan_supplement
 
 try:
     from sync_configs import CONFIGS
@@ -48,11 +50,16 @@ def main():
     blocks: list[str] = []
     error_count = 0
 
+    covered = covered_dates(pdfs)
+    today = date.today()
+
     for config in CONFIGS:
         team = config["team"]
         blocks.append(f"===== {team}  ->  {config['calendar_id']} =====")
+        wp_events: list[Event] = []
         for pdf in pdfs:
             events = safe_extract(pdf, config)
+            wp_events.extend(events)
             if not events:
                 continue
             errors = sum(1 for e in events if e.is_error)
@@ -60,6 +67,21 @@ def main():
             suffix = f", {errors} FEHLER" if errors else ""
             blocks.append(f"\n{pdf.name}  ({len(events)} events{suffix})")
             for event in events:
+                blocks.append(_format_event(event))
+
+        # Season Spielplan supplement: future games + probable-cancellation
+        # markers (same policy the sync applies).
+        extra, stats = spielplan_supplement(config, wp_events, covered, today)
+        if stats.get("spielplan") or extra:
+            errors = sum(1 for e in extra if e.is_error)
+            error_count += errors
+            suffix = f", {errors} FEHLER" if errors else ""
+            name = stats.get("spielplan") or "nicht gefunden"
+            blocks.append(
+                f"\nSpielplan: {name}  ({stats.get('spielplan_future', 0)} future, "
+                f"{stats.get('spielplan_cancelled', 0)} evtl. abgesagt{suffix})"
+            )
+            for event in extra:
                 blocks.append(_format_event(event))
         blocks.append("")
 
