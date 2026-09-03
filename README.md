@@ -7,8 +7,9 @@ approach as [aws-ical-sync](../aws-ical-sync), reusing its Google service
 account secret).
 
 **Pipeline:** discover/download the weekly PDFs → parse the team×weekday grid
-→ extract per-team training/game events → sync them into Google Calendar
-(idempotent upsert, dry-run by default).
+→ extract per-team training/game events (supplemented by the season Spielplan
+for future games) → sync them into Google Calendar (idempotent upsert, dry-run
+by default).
 
 ## Setup
 
@@ -69,8 +70,9 @@ title templates. See the example file for every field, including
 uv run python list_events.py
 ```
 
-Parses the downloaded PDFs and prints every event it would create per team,
-including any `⚠️ FEHLER` markers, to the console and `events.txt`. No Google
+Parses the downloaded PDFs and prints every event it would create per team —
+including the season-Spielplan supplement (future games and probable-cancellation
+markers) and any `⚠️ FEHLER` markers — to the console and `events.txt`. No Google
 API calls — safe for verifying a team's config.
 
 ## Sync to Google Calendar
@@ -93,6 +95,36 @@ Regular team-row trainings and games are the ones the myice feed can replace
 are dropped when a myice event already overlaps them (per `mih_overlap`). Förder
 trainings and free-skates are never on myice, so they stay **confirmed** and a
 time collision there is ignored.
+
+### Season Spielplan (future games & cancellations)
+
+The Wochenplan only covers a few weeks out. A team's **Spielplan** — the
+full-season game list — fills the gaps. Drop the team's `Spielplan <team>.pdf`
+into `downloads/` (or point to it with the `spielplan` config key). Per-team
+behaviour is set by `spielplan_mode`: `IGNORE`, `OPTIONAL` (default — use it if
+present), or `REQUIRE` (a missing Spielplan becomes a loud error marker). Unless
+ignored, `sync.py` supplements the Wochenplan events (see `spielplan_events.py`):
+
+- **Future games** on dates *beyond* the downloaded Wochenplan window are created
+  as tentative, **provisional** game entries (using `game_summary_format`). When
+  that week's Wochenplan later appears, its game takes over and the provisional
+  one is reconciled away.
+- **Probable cancellations:** a Spielplan game whose week *is* covered by a
+  Wochenplan, but which has no game in it that day, becomes a loud all-day
+  `⚠️ Spiel evtl. abgesagt` marker (only for upcoming games) — probably cancelled
+  or moved. It is logged and shown on the calendar, never silently dropped.
+
+The Wochenplan is authoritative: wherever it has a game, the Spielplan is
+ignored for that day. Preview the whole classification (match / missing /
+future / wp-only) without writing anything:
+
+```bash
+uv run python verify_spielplan.py            # all configured teams
+uv run python verify_spielplan.py "U14 A"    # one team
+```
+
+The Spielplan PDF is a fixed-column report (not a vector table), so
+`parse_spielplan.py` recovers its columns from the header word positions.
 
 ### Cancelling events
 

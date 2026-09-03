@@ -25,6 +25,7 @@ from extract_events import Event, safe_extract
 from fetch_plans import latest_local_pdfs
 from google_calendar import get_calendar_service, list_event_intervals
 from overlap import DEFAULT_MIH_UID_PREFIX, KEEP, resolve_mih_overlap, validate_policy
+from spielplan_events import covered_dates, spielplan_supplement
 import sync_state
 
 try:
@@ -277,9 +278,21 @@ def _mih_intervals(service, config, events):
 
 
 def sync_team(service, config: dict, pdfs, dry_run: bool, state=None) -> dict:
+    tzname = config.get("timezone", DEFAULT_TIMEZONE)
+
     events: list[Event] = []
     for pdf in pdfs:
         events.extend(safe_extract(pdf, config))
+
+    # Fill the gaps around the Wochenplan from the team's season Spielplan:
+    # future games it doesn't cover yet, and markers for games missing from a
+    # week it does cover (probable cancellations). The Wochenplan wins wherever
+    # it has a game, so this only adds, never overrides.
+    today = datetime.now(ZoneInfo(tzname)).date()
+    extra, spielplan_stats = spielplan_supplement(
+        config, events, covered_dates(pdfs), today
+    )
+    events.extend(extra)
 
     # Resolve overlaps with the authoritative myice feed.
     policy = validate_policy(config.get("mih_overlap", KEEP))
@@ -296,7 +309,6 @@ def sync_team(service, config: dict, pdfs, dry_run: bool, state=None) -> dict:
     events = apply_cancellations(events, config.get("cancellations", []))
     cancelled = before_cancel - len(events)
 
-    tzname = config.get("timezone", DEFAULT_TIMEZONE)
     uid_prefix = config.get("uid_prefix", "ehc-")
     pairs = []
     for event in events:
@@ -312,6 +324,7 @@ def sync_team(service, config: dict, pdfs, dry_run: bool, state=None) -> dict:
     result["team"] = config["team"]
     result["errors"] = sum(1 for e in events if e.is_error)
     result["cancelled"] = cancelled
+    result.update(spielplan_stats)
     return result
 
 
