@@ -12,17 +12,14 @@ account secret).
 
 ## Setup
 
-> [!IMPORTANT]
-> This project directory lives on a `noexec` filesystem mount, which breaks
-> mmap-loading of compiled `.so` files (e.g. `pydantic_core`, used by
-> `docling`'s dependency chain and others) — `uv sync`'s default `.venv`
-> here will fail at import time with `failed to map segment from shared
-> object`. Point the venv at a normal filesystem instead, e.g.:
+> [!NOTE]
+> `run-local.sh` keeps its venv outside the project tree (default
+> `~/.venvs/ehcw-trainings`). If you run `uv` commands directly and want to
+> reuse that same venv, export the matching path first:
 > ```bash
 > export UV_PROJECT_ENVIRONMENT=~/.venvs/ehcw-trainings
 > ```
-> Put that in your shell profile (or re-export it each session) before
-> running any `uv` command below.
+> Otherwise `uv sync`'s default in-project `.venv` works fine.
 
 ```bash
 uv sync
