@@ -1,24 +1,33 @@
 """
 Turns a parsed WeekPlan into calendar-ready events for one configured team.
 
-Per team and weekday there are three sub-cells - Halle, Feld, Away - whose
-roles differ between trainings and games:
+Per team and weekday there are three sub-cells - Halle, Feld, Away. The
+activity code + time may sit in *any* of them (the scheduler is inconsistent:
+Wochenplan-40 puts most trainings in Feld with Halle empty), and a day can
+carry several timed sessions, so each cell is inspected for a code and every
+timed session becomes its own event:
 
-  Training (activity code ET/TT/TH/TRL, normally in the Halle cell):
-    * Halle = activity code + time (e.g. "ET 1715-1815")
-    * Feld  = the place/rink (e.g. "Wallrüti"), OR a *second* session that
-      day (e.g. Halle "ET 0900-1030" + Feld "ET 1300-1430"), OR a named
-      extra like "freies Chneblä" whose time then sits in the Away cell.
+  Training (activity code ET/TT/TH/TRL):
+    * the code + time (e.g. "ET 1715-1815") is picked up from whichever slot
+      holds it; multiple trainings in one day (e.g. Feld "ET" + Away "TT")
+      each yield an event.
+    * a single training may name its place/rink (e.g. "Wallrüti") in an
+      otherwise-unused Feld/Halle cell.
+    * a named extra like "freies Chneblä" or a written-out "Torhüter
+      1630-1730" is its own event, timed from its own text or a lone
+      bare-time sibling cell.
 
-  Game (activity code MS/FS/ZC/TU/PO, normally in the Away cell):
-    * Halle = the venue/town where it is played (e.g. "Küssnacht")
-    * Feld  = the opponent (e.g. "Innerschwyz")
-    * Away  = activity code + time (e.g. "FS 1030")
+  Game (activity code MS/FS/ZC/TU/PO):
+    * the code + time is picked up from whichever slot holds it; home when it
+      is in Halle, away otherwise.
+    * Halle names the venue/town (e.g. "Küssnacht") and Feld the opponent
+      (e.g. "Innerschwyz").
 
-Games list only a start time, so a default duration is assumed. Days with
-content but no parseable time become all-day events (the real time lives in
-another team's row, e.g. a joint U12 game). "Car" is Swiss-German for a
-coach/bus and is normalised to "Bus".
+Slot position does NOT encode an outdoor field - the plan marks outdoor
+explicitly with the word "Aussen". Games list only a start time, so a default
+duration is assumed. Days with content but no parseable time become all-day
+events (the real time lives in another team's row, e.g. a joint U12 game).
+"Car" is Swiss-German for a coach/bus and is normalised to "Bus".
 """
 
 import re
@@ -26,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from parse_plan import WEEKDAYS, Cell, DayCells, WeekPlan, parse_week
+from parse_plan import WEEKDAYS, DayCells, WeekPlan, parse_week
 
 # Games list only a start time; assume this duration for their end time.
 DEFAULT_GAME_MINUTES = 90
@@ -42,6 +51,7 @@ DEFAULT_TRANSPORT_ICONS = {
 }
 
 GAME_CODES = {"MS", "FS", "ZC", "TU", "PO"}
+TRAINING_CODES = {"ET", "TT", "TH", "TRL"}
 
 # Activity-code -> full word. Seeded from the legend printed on each plan, but
 # kept here as the source of truth (the in-PDF legend text is occasionally
@@ -193,17 +203,6 @@ def _combine_garderobe(*values: str) -> str:
     return ", ".join(dict.fromkeys(parts))
 
 
-def _place_from_feld(feld: Cell) -> tuple[str, str]:
-    """Returns (place, note). A Feld cell that is really an activity note
-    (e.g. "freies Chneblä", "mit U12") yields an empty place and a note."""
-    text = feld.art.strip()
-    if not text:
-        return "", ""
-    if _NON_PLACE_RE.search(text) or _TIME_RANGE_RE.search(text) or _TYPE_RE.search(text):
-        return "", text
-    return text, ""
-
-
 def _make_event(
     source: str,
     weekday: str,
@@ -267,34 +266,7 @@ def _make_event(
     )
 
 
-def _second_session(
-    source: str, weekday: str, cells: DayCells, feld: "ParsedActivity",
-    away: "ParsedActivity", primary_from_halle: bool, summary_format: str, team: str,
-) -> Event | None:
-    """A named extra session in the Feld cell - e.g. an afternoon "ET 1300-1430"
-    or a "freies Chneblä" whose time sits in the Away cell."""
-    name = feld.leftover
-    if not name:
-        return None
-
-    if feld.start:  # Feld carries its own time (e.g. "ET 1300-1430")
-        start, end = feld.start, feld.end
-    elif away.start and primary_from_halle:  # time is in the Away cell
-        start, end = away.start, away.end
-    else:
-        return None  # no time for it -> handled as a note on the primary
-
-    type_full = TYPE_MAP.get(feld.type_code, name) if feld.type_code else name
-    type_label = feld.type_code or name
-    # A coded second training (e.g. an afternoon "ET 1300-1430") can be on myice
-    # and so is replaceable; a named extra like "freies Chneblä" is EHC-only and
-    # stays put.
-    return _make_event(
-        source, weekday, cells.day_date, type_label, type_full, "", "",
-        _fmt_time(start), _fmt_time(end),
-        _combine_garderobe(cells.feld.g), _normalise_transport(cells.feld.trsp),
-        summary_format, team, [], myice_replaceable=feld.type_code is not None,
-    )
+_SLOT_LABELS = {"halle": "Halle", "feld": "Feld", "away": "Away"}
 
 
 def _build_day_events(
@@ -302,82 +274,154 @@ def _build_day_events(
     game_summary_format: str, team: str, home_label: str = "", away_label: str = "",
     transport_icons: dict[str, str] | None = None,
 ) -> list[Event]:
+    """Turn one day's three sub-cells into events.
+
+    The activity code+time may sit in *any* of the Halle/Feld/Away slots (the
+    scheduler is inconsistent, e.g. Wochenplan-40 puts most trainings in Feld),
+    and a day can carry more than one timed session. So each cell is inspected
+    for a code, and every timed session yields its own event. Slot position
+    only decides game home/away (Halle) and venue/opponent (Halle/Feld)."""
     if not (cells.halle.art or cells.feld.art or cells.away.art):
         return []  # completely empty day
 
-    halle = _parse_activity(cells.halle.art)
-    feld = _parse_activity(cells.feld.art)
-    away = _parse_activity(cells.away.art)
+    order = ("halle", "feld", "away")
+    parsed = {name: _parse_activity(getattr(cells, name).art) for name in order}
+    halle, feld = parsed["halle"], parsed["feld"]
 
-    type_code = halle.type_code or away.type_code
-    is_game = type_code in GAME_CODES
-    # Home game: the game code+time sit in the Halle cell (played at our rink).
-    # Away game: they sit in the Away cell, and Halle holds the venue.
-    is_home = is_game and halle.type_code in GAME_CODES
-    primary_from_halle = halle.start is not None
+    def garderobe_of(slots: set[str]) -> str:
+        return _combine_garderobe(*(getattr(cells, s).g for s in order if s in slots))
 
-    # Primary time: Halle first, then Away (games put it in Away).
-    timed = next((a for a in (halle, away) if a.start), None)
+    def transport_of(slots: set[str]) -> str:
+        return _normalise_transport(*(getattr(cells, s).trsp for s in order if s in slots))
 
-    # A Feld cell can be: the place, a second session, or just a note.
-    feld_place, feld_note = _place_from_feld(cells.feld)
-    second = _second_session(
-        source, weekday, cells, feld, away, primary_from_halle, summary_format, team
-    )
+    specs: list[dict] = []  # one dict per event, resolved into Events at the end
+    used: set[str] = set()  # slots already consumed as a session/venue/opponent
 
-    # --- place / opponent ---
-    place = ""
-    opponent = ""
-    notes: list[str] = []
-    if is_game:
-        # Game: Halle = venue, Feld = opponent.
-        place = halle.leftover
-        opponent = feld.leftover
+    # --- Games: a game code in any slot. Venue = Halle name, opponent = Feld name;
+    #     home when the code is in Halle, away otherwise. ---
+    venue = halle.leftover if halle.type_code is None else ""
+    opponent = feld.leftover if feld.type_code is None else ""
+    for slot in order:
+        a = parsed[slot]
+        if a.type_code not in GAME_CODES:
+            continue
+        specs.append(dict(
+            kind="game", type_label=a.type_code,
+            type_full=TYPE_MAP.get(a.type_code, a.type_code), place=venue,
+            opponent=opponent, start=a.start, end=a.end,
+            notes=[f"Gegner: {opponent}"] if opponent else [],
+            is_game=True, is_home=(slot == "halle"), myice_replaceable=True,
+            fmt=game_summary_format, own=set(order),
+        ))
+        used.add(slot)
+    is_game_day = bool(specs)
+    if is_game_day:  # the venue/opponent name cells belong to the game
+        if venue:
+            used.add("halle")
         if opponent:
-            notes.append(f"Gegner: {opponent}")
-    else:
-        # Training: Feld is the place (unless it's a second session / note).
-        if second is None:
-            place = feld_place
-            if feld_note:
-                notes.append(f"Feld: {feld_note}")
-        # A no-code training whose time came from Away may name a venue-type
-        # in Halle (e.g. "Turnhalle") - keep it as a note.
-        if not halle.type_code and halle.leftover and halle.leftover != place:
-            notes.append(f"Halle: {halle.leftover}")
+            used.add("feld")
 
-    # --- type ---
-    if type_code:
-        type_label = type_code
-        type_full = TYPE_MAP.get(type_code, type_code)
-    else:
-        # No code: fall back to descriptive text (venue/opponent for a
-        # timeless game row, or the Halle venue-type).
-        fallback = halle.leftover or away.leftover or feld.leftover
-        type_label = type_full = fallback
+    # --- Trainings: a training code + time in any slot, each its own event. ---
+    for slot in order:
+        a = parsed[slot]
+        if a.type_code in TRAINING_CODES and a.start is not None:
+            specs.append(dict(
+                kind="training", type_label=a.type_code,
+                type_full=TYPE_MAP.get(a.type_code, a.type_code), place="",
+                opponent="", start=a.start, end=a.end, notes=[], is_game=False,
+                is_home=False, myice_replaceable=True, fmt=summary_format,
+                own={slot},
+            ))
+            used.add(slot)
 
-    # --- garderobe / transport (Feld's belong to the second session) ---
-    feld_g = "" if second is not None else cells.feld.g
-    feld_trsp = "" if second is not None else cells.feld.trsp
-    garderobe = _combine_garderobe(cells.halle.g, feld_g, cells.away.g)
-    transport = _normalise_transport(cells.halle.trsp, feld_trsp, cells.away.trsp)
+    # --- Named/extra sessions: a written-out activity ("freies Chneblä",
+    #     "Torhüter 1630-1730") whose time is its own or a lone bare-time
+    #     sibling (e.g. Feld "freies Chneblä" + Away "1600-1615"). These are
+    #     EHC-only, so they stay confirmed (not myice-replaceable). ---
+    for slot in order:
+        if slot in used:
+            continue
+        a = parsed[slot]
+        if a.type_code is not None or not a.leftover:
+            continue
+        start, end, borrowed = a.start, a.end, None
+        if start is None:
+            borrowed = next(
+                (t for t in order if t not in used and t != slot
+                 and parsed[t].type_code is None and not parsed[t].leftover
+                 and parsed[t].start is not None),
+                None,
+            )
+            if borrowed is not None:
+                start, end = parsed[borrowed].start, parsed[borrowed].end
+        if start is None:
+            continue  # no time -> not a session; handled as a note below
+        specs.append(dict(
+            kind="named", type_label=a.leftover, type_full=a.leftover, place="",
+            opponent="", start=start, end=end, notes=[], is_game=False,
+            is_home=False, myice_replaceable=False, fmt=summary_format, own={slot},
+        ))
+        used.add(slot)
+        if borrowed is not None:
+            used.add(borrowed)
 
-    # Games are tentative (participation isn't confirmed), so they get their
-    # own heads-up template.
-    fmt = game_summary_format if is_game else summary_format
-    events = [
-        _make_event(
-            source, weekday, cells.day_date, type_label, type_full, place, opponent,
-            _fmt_time(timed.start) if timed else None,
-            _fmt_time(timed.end) if timed else None,
-            garderobe, transport, fmt, team, notes, is_game=is_game,
-            is_home=is_home, home_label=home_label, away_label=away_label,
-            transport_icons=transport_icons,
+    primary = next((s for s in specs if s["kind"] == "training"), None)
+
+    # A single training may name a place in an unused Feld/Halle cell (e.g.
+    # Halle "ET 1715-1815" + Feld "Wallrüti"). On a game day those cells are the
+    # venue/opponent, so a training then has no place of its own.
+    if primary is not None and not is_game_day:
+        for slot in ("feld", "halle"):
+            a = parsed[slot]
+            if (slot not in used and a.type_code is None and a.start is None
+                    and a.leftover and not _NON_PLACE_RE.search(a.leftover)):
+                primary["place"] = a.leftover
+                used.add(slot)
+                break
+
+    # Remaining content becomes a note on the primary training, if any.
+    if primary is not None:
+        for slot in order:
+            a = parsed[slot]
+            if slot not in used and a.leftover:
+                primary["notes"].append(f"{_SLOT_LABELS[slot]}: {a.leftover}")
+                used.add(slot)
+
+    # The primary training also absorbs the garderobe/transport of any cell not
+    # owned by another session (e.g. a free-skate keeps its own Feld garderobe).
+    if primary is not None and len(specs) > 1:
+        owned_by_others = set().union(
+            *(s["own"] for s in specs if s is not primary)
         )
+        primary["own"] |= {s for s in order if s not in owned_by_others}
+
+    # No coded/named/timed session but there is content -> a single all-day
+    # event (e.g. a joint game whose real time lives in another team's row).
+    if not specs:
+        fallback = halle.leftover or parsed["away"].leftover or feld.leftover
+        notes = [
+            f"{_SLOT_LABELS[slot]}: {parsed[slot].leftover}"
+            for slot in order
+            if parsed[slot].leftover and parsed[slot].leftover != fallback
+        ]
+        specs.append(dict(
+            kind="fallback", type_label=fallback, type_full=fallback, place="",
+            opponent="", start=None, end=None, notes=notes, is_game=False,
+            is_home=False, myice_replaceable=True, fmt=summary_format,
+            own=set(order),
+        ))
+
+    return [
+        _make_event(
+            source, weekday, cells.day_date, s["type_label"], s["type_full"],
+            s["place"], s["opponent"], _fmt_time(s["start"]), _fmt_time(s["end"]),
+            garderobe_of(s["own"]), transport_of(s["own"]), s["fmt"], team,
+            s["notes"], is_game=s["is_game"], is_home=s["is_home"],
+            home_label=home_label, away_label=away_label,
+            transport_icons=transport_icons, myice_replaceable=s["myice_replaceable"],
+        )
+        for s in specs
     ]
-    if second is not None:
-        events.append(second)
-    return events
 
 
 def _age_group(team_label: str) -> str | None:
