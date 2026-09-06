@@ -4,13 +4,11 @@ training/game/second-session/Förder assembly, and fail-loud error handling."""
 import unittest
 from datetime import date
 
-from parse_plan import Cell
 from extract_events import (
     _age_group,
     _combine_garderobe,
     _normalise_transport,
     _parse_activity,
-    _place_from_feld,
     extract_events,
     safe_extract,
 )
@@ -44,11 +42,6 @@ class HelperTest(unittest.TestCase):
     def test_combine_garderobe_dedups(self):
         self.assertEqual(_combine_garderobe("5/6", "s2"), "5/6, s2")
         self.assertEqual(_combine_garderobe("3", "3", ""), "3")
-
-    def test_place_vs_note(self):
-        self.assertEqual(_place_from_feld(Cell("Wetzikon")), ("Wetzikon", ""))
-        self.assertEqual(_place_from_feld(Cell("freies Chneblä")), ("", "freies Chneblä"))
-        self.assertEqual(_place_from_feld(Cell("")), ("", ""))
 
     def test_age_group(self):
         self.assertEqual(_age_group("U14 A"), "U14")
@@ -145,6 +138,67 @@ class HomeAwayGameTest(unittest.TestCase):
         week = build_week({"U14 A": {0: cells(0, ("Chur", "", ""), ("X", "", ""), ("MS 1400", "", "Pw"))}})
         e = [x for x in extract_events(week, cfg) if x.is_game][0]
         self.assertTrue(e.summary.startswith("AUTO "))
+
+
+class CodeInAnyRowTest(unittest.TestCase):
+    """Wochenplan-40 puts the activity code+time in whichever of the three
+    Halle/Feld/Away slots the scheduler picked - often Feld, sometimes two
+    coded sessions in one day. The code+time must be found in any row, and
+    every timed session must yield its own event."""
+
+    def _events(self, day_cells):
+        week = build_week({"U14 A": {0: day_cells}})
+        return [e for e in extract_events(week, CONFIG) if not e.is_error]
+
+    def test_training_code_in_feld_row(self):
+        # Halle empty, the only training sits in Feld (the common wp40 case).
+        events = self._events(cells(0, ("", "", ""), ("ET 1730-1845", "", ""), ("", "", "")))
+        self.assertEqual(len(events), 1)
+        e = events[0]
+        self.assertEqual(e.type, "ET")
+        self.assertEqual((e.time_start, e.time_end), ("17:30", "18:45"))
+        self.assertFalse(e.all_day)
+        self.assertFalse(e.is_game)
+
+    def test_two_trainings_in_feld_and_away(self):
+        # ET in Feld + TT in Away -> two separate training events, both timed.
+        events = self._events(cells(0, ("", "", ""), ("ET 2030-2145", "", ""), ("TT 1930", "", "")))
+        by_type = {e.type: e for e in events}
+        self.assertIn("ET", by_type)
+        self.assertIn("TT", by_type)
+        self.assertEqual(
+            (by_type["ET"].time_start, by_type["ET"].time_end), ("20:30", "21:45")
+        )
+        self.assertEqual(by_type["TT"].time_start, "19:30")
+        self.assertFalse(any(e.is_game for e in events))
+
+    def test_training_in_feld_plus_named_session_in_away(self):
+        # ET in Feld + a written-out "Torhüter 1630-1730 Aussen" in Away.
+        events = self._events(
+            cells(0, ("", "", ""), ("ET 1915-2015", "", ""), ("Torhüter 1630-1730 Aussen", "", ""))
+        )
+        et = next(e for e in events if e.type == "ET")
+        self.assertEqual((et.time_start, et.time_end), ("19:15", "20:15"))
+        torhueter = next(e for e in events if "Torhüter" in e.type)
+        self.assertEqual((torhueter.time_start, torhueter.time_end), ("16:30", "17:30"))
+
+    def test_training_names_place_in_feld(self):
+        # Halle carries the code+time; an unused plain Feld cell names the rink.
+        events = self._events(cells(0, ("ET 1715-1815", "", ""), ("Wallrüti", "", ""), ("", "", "")))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].place, "Wallrüti")
+        self.assertEqual(events[0].type, "ET")
+
+    def test_training_and_game_same_day(self):
+        # Halle ET training + Away MS game (opponent in Feld) -> both emitted.
+        events = self._events(cells(0, ("ET 1000-1130", "", ""), ("Wetzikon", "", ""), ("MS 2015", "", "")))
+        training = next(e for e in events if not e.is_game)
+        self.assertEqual(training.type, "ET")
+        self.assertEqual((training.time_start, training.time_end), ("10:00", "11:30"))
+        game = next(e for e in events if e.is_game)
+        self.assertEqual(game.type, "MS")
+        self.assertEqual(game.time_start, "20:15")
+        self.assertEqual(game.opponent, "Wetzikon")
 
 
 class ErrorHandlingTest(unittest.TestCase):

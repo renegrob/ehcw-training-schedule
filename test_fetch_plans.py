@@ -1,17 +1,49 @@
 """Unit tests for fetch_plans: week-number parsing, current/future filtering
 (incl. new-year wraparound), and latest-revision-per-week local selection."""
 
+import importlib
 import os
 import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
+import fetch_plans
 from fetch_plans import (
     _week_is_current_or_future,
     latest_local_pdfs,
     week_key_from_name,
 )
+
+
+class DownloadDirEnvTest(unittest.TestCase):
+    """DOWNLOAD_DIR is env-configurable so the Lambda deploy can redirect PDF
+    fetch/discovery to /tmp (the package dir is read-only there). Both
+    Wochenplan and Spielplan discovery key off this one value."""
+
+    def _reload_with_env(self, env):
+        with mock.patch.dict(os.environ, env, clear=False):
+            if "DOWNLOAD_DIR" not in env:
+                os.environ.pop("DOWNLOAD_DIR", None)
+            return importlib.reload(fetch_plans).DOWNLOAD_DIR
+
+    def tearDown(self):
+        # Restore the module to the ambient-environment default for other tests.
+        os.environ.pop("DOWNLOAD_DIR", None)
+        importlib.reload(fetch_plans)
+
+    def test_env_override_is_honored(self):
+        self.assertEqual(
+            self._reload_with_env({"DOWNLOAD_DIR": "/tmp/downloads"}),
+            Path("/tmp/downloads"),
+        )
+
+    def test_defaults_to_package_downloads_dir_when_unset(self):
+        self.assertEqual(
+            self._reload_with_env({}),
+            Path(fetch_plans.__file__).parent / "downloads",
+        )
 
 
 class WeekKeyTest(unittest.TestCase):

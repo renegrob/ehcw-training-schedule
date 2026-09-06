@@ -162,8 +162,31 @@ def list_existing(service, calendar_id: str, uid_prefix: str) -> dict:
     return existing
 
 
+def _canonical_edge(edge: dict | None):
+    """A comparison-stable form of a Google start/end edge. Google returns timed
+    events with a UTC offset ("...+02:00") while our body emits the naive local
+    time plus a timeZone; compared as raw dicts these never match, so every
+    timed event would look 'changed' and be rewritten each run. Reduce both to
+    the same instant (all-day edges to their date) so unchanged events are left
+    alone."""
+    if not edge:
+        return edge
+    if "date" in edge:
+        return ("date", edge["date"])
+    dt = datetime.fromisoformat(edge["dateTime"])
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo(edge.get("timeZone", DEFAULT_TIMEZONE)))
+    return ("dt", dt.astimezone(ZoneInfo("UTC")).isoformat())
+
+
 def _unchanged(existing_event: dict, body: dict) -> bool:
-    return all(existing_event.get(f) == body.get(f) for f in _COMPARE_FIELDS)
+    for f in _COMPARE_FIELDS:
+        if f in ("start", "end"):
+            if _canonical_edge(existing_event.get(f)) != _canonical_edge(body.get(f)):
+                return False
+        elif existing_event.get(f) != body.get(f):
+            return False
+    return True
 
 
 def _body_date(body: dict) -> str | None:
@@ -223,6 +246,10 @@ def reconcile(
             unchanged += 1
             new_synced[uid] = _state_entry(body)
         else:
+            # events.import() rejects an update whose sequence is below the
+            # event's current one ("Invalid sequence value"). Carry the existing
+            # sequence forward so the update is accepted (Google bumps it).
+            body["sequence"] = existing_event.get("sequence", 0)
             if not dry_run:
                 service.events().import_(calendarId=calendar_id, body=body).execute(num_retries=3)
             updated += 1

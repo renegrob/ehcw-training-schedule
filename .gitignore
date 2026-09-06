@@ -10,3 +10,10 @@ __pycache__/
 *.pyc
 /.google-service-account.json
 /.idea/
+
+# Deploy build/runtime artifacts (see deploy.sh / docs/deploy.md)
+function.zip
+out.json
+invoke-meta.json
+# Generated per-deploy from the resolved function ARN (embeds the account id).
+scheduler-invoke-policy.json
