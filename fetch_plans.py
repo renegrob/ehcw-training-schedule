@@ -7,6 +7,7 @@ modified) and was verified to be more reliable than scraping the
 /artikel/trainingsplaene/ HTML page.
 """
 
+import os
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -15,7 +16,12 @@ from zoneinfo import ZoneInfo
 import requests
 
 MEDIA_API_URL = "https://ehc-winterthur.ch/wp-json/wp/v2/media"
-DOWNLOAD_DIR = Path(__file__).parent / "downloads"
+# Where PDFs are fetched to / found. Defaults to a "downloads/" dir next to this
+# file for local runs; on Lambda the package dir is read-only, so the deploy
+# points DOWNLOAD_DIR at /tmp/downloads (the only writable path). Both Wochenplan
+# discovery (below) and Spielplan discovery (spielplan_events imports this value)
+# key off it, so one env var redirects everything.
+DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR") or Path(__file__).parent / "downloads")
 TIMEZONE = ZoneInfo("Europe/Zurich")
 
 # Matches the week number out of filenames like "Wochenplan-34.pdf",

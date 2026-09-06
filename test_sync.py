@@ -157,6 +157,69 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(svc.imported, [])
         self.assertEqual(svc.deleted, [])
 
+    def test_update_carries_existing_sequence(self):
+        """events.import() rejects an update whose sequence is below the
+        existing event's current sequence ('Invalid sequence value'). An update
+        must therefore carry the existing event's sequence forward."""
+        start = {"dateTime": "2099-01-01T09:00:00"}
+        end = {"dateTime": "2099-01-01T10:00:00"}
+        existing = [
+            {"iCalUID": "ehc-wp-seq", "id": "sq", "summary": "OLD", "sequence": 3,
+             "status": "confirmed", "start": start, "end": end},
+        ]
+        # Body differs (summary) -> update; it carries no sequence of its own.
+        pairs = [("ehc-wp-seq", {"summary": "NEW", "status": "confirmed",
+                                 "start": start, "end": end})]
+        svc = FakeService(existing)
+        sync.reconcile(svc, "cal", "ehc-wp-", pairs, "Europe/Zurich", dry_run=False)
+        self.assertEqual(len(svc.imported), 1)
+        self.assertEqual(svc.imported[0].get("sequence"), 3)
+
+    def test_create_sets_no_sequence(self):
+        """A brand-new event has no existing counterpart, so no sequence is set
+        (Google assigns it)."""
+        svc = FakeService([])
+        sync.reconcile(svc, "cal", "ehc-wp-", [("ehc-wp-new", {"summary": "new"})],
+                       "Europe/Zurich", dry_run=False)
+        self.assertEqual(len(svc.imported), 1)
+        self.assertNotIn("sequence", svc.imported[0])
+
+    def test_no_churn_when_only_offset_differs(self):
+        """Google returns dateTime with a UTC offset; our body emits the naive
+        local time plus a timeZone. Same instant -> must be 'unchanged', not
+        rewritten every run."""
+        existing = [{
+            "iCalUID": "ehc-wp-tz", "id": "tz", "summary": "ET", "colorId": "11",
+            "status": "confirmed",
+            "start": {"dateTime": "2026-09-04T06:30:00+02:00", "timeZone": "Europe/Zurich"},
+            "end":   {"dateTime": "2026-09-04T07:30:00+02:00", "timeZone": "Europe/Zurich"},
+        }]
+        body = {"summary": "ET", "colorId": "11", "status": "confirmed",
+                "start": {"dateTime": "2026-09-04T06:30:00", "timeZone": "Europe/Zurich"},
+                "end":   {"dateTime": "2026-09-04T07:30:00", "timeZone": "Europe/Zurich"}}
+        svc = FakeService(existing)
+        res = sync.reconcile(svc, "cal", "ehc-wp-", [("ehc-wp-tz", body)],
+                             "Europe/Zurich", dry_run=False)
+        self.assertEqual(res["unchanged"], 1)
+        self.assertEqual(res["updated"], 0)
+        self.assertEqual(svc.imported, [])
+
+    def test_real_time_change_is_still_updated(self):
+        """A genuine time difference (different instant) must still update."""
+        existing = [{
+            "iCalUID": "ehc-wp-t", "id": "t", "summary": "ET", "status": "confirmed",
+            "start": {"dateTime": "2026-09-04T06:30:00+02:00", "timeZone": "Europe/Zurich"},
+            "end":   {"dateTime": "2026-09-04T07:30:00+02:00", "timeZone": "Europe/Zurich"},
+        }]
+        body = {"summary": "ET", "status": "confirmed",
+                "start": {"dateTime": "2026-09-04T08:30:00", "timeZone": "Europe/Zurich"},
+                "end":   {"dateTime": "2026-09-04T09:30:00", "timeZone": "Europe/Zurich"}}
+        svc = FakeService(existing)
+        res = sync.reconcile(svc, "cal", "ehc-wp-", [("ehc-wp-t", body)],
+                             "Europe/Zurich", dry_run=False)
+        self.assertEqual(res["updated"], 1)
+        self.assertEqual(len(svc.imported), 1)
+
 
 class ManualDeletionStateTest(unittest.TestCase):
     """A previously-synced event that vanished from the calendar was deleted by
