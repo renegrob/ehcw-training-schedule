@@ -33,3 +33,16 @@ table).
 
 The core behavioral invariants that must be preserved live in
 [`.claude/rules/`](../.claude/rules/).
+
+## Known limitations
+
+- **Cross-team `freiwillig` sessions have no recoverable time.** A `<code>
+  freiwillig` cell (e.g. `TT freiwillig`) in a team's row marks that team's
+  *voluntary* participation in another (sibling) team's session of the same code —
+  mandatory for that team, optional for this one. The session's time lives only in
+  the other team's aligned cell, never in the `freiwillig` cell itself. Because
+  `extract_events.py` parses one team row in isolation, it cannot recover that time
+  and instead emits a visible all-day `freiwillig` marker (fail-visible, not a
+  dropped day). Resolving the real time would require a cross-team join (reading the
+  aligned cell in the sibling row), which is not implemented. Only relevant if such
+  a team gets configured for sync.
