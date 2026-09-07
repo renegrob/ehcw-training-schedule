@@ -20,9 +20,15 @@ uv run python main.py            # fetch Wochenplan PDFs -> markdown/ (inspectio
 uv run python list_events.py     # offline event preview -> events.txt (no Google calls, no key)
 uv run python verify_spielplan.py ["U14 A"]   # cross-check Wochenplan games vs Spielplan
 uv run python sync.py [--apply]  # dry-run by default; --apply writes to the calendar
-./run-local.sh [--apply|--list]  # fetch then sync/list using the LOCAL key (no AWS)
+./run-local.sh [--apply|--list]  # fetch then sync/list using the LOCAL Google key
 SKIP_FETCH=1 ./run-local.sh      # skip download, use PDFs already on disk
+source ./aws-login.sh            # needed before ./run-local.sh --apply (shared S3 state)
 ```
+
+The sync state (tombstones + what we created) is shared with the deployed Lambda
+via S3, so local runs cannot diverge from it: `--apply` requires AWS credentials,
+a dry-run falls back to the local file with a loud warning. See
+[docs/running.md](docs/running.md#the-sync-state-is-shared-with-the-deployed-lambda).
 
 ## Where things are
 

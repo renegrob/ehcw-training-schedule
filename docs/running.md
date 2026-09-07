@@ -56,7 +56,41 @@ anything. See [spielplan.md](spielplan.md).
 SKIP_FETCH=1 ./run-local.sh   # sync what's already downloaded
 ```
 
-`run-local.sh` uses the local `.google-service-account.json`, so no AWS access is
-needed; `--list` needs no key at all (it never touches Google Calendar). It also
-uses a venv outside the project tree (`~/.venvs/ehcw-trainings`); to run `uv`
-commands directly against it, `export UV_PROJECT_ENVIRONMENT=~/.venvs/ehcw-trainings`.
+`run-local.sh` reads the Google key from the local `.google-service-account.json`
+rather than AWS SSM; `--list` needs no key at all (it never touches Google
+Calendar). It also uses a venv outside the project tree (`~/.venvs/ehcw-trainings`);
+to run `uv` commands directly against it,
+`export UV_PROJECT_ENVIRONMENT=~/.venvs/ehcw-trainings`.
+
+### The sync state is shared with the deployed Lambda
+
+The sync state holds the tombstones ("you deleted this event, stay away") and the
+list of events we created. The Lambda keeps it in S3, so if a local run kept its
+own copy the two would diverge and each would undo the other's deletions — a local
+`--apply` would silently resurrect events you deleted, and vice versa.
+
+So sync runs default to the **same S3 object** the Lambda uses, derived from the
+caller's account id. Log in first:
+
+```bash
+source ./aws-login.sh      # SSO login, exports AWS_PROFILE=workload
+./run-local.sh --apply
+```
+
+Each run prints which state it used (`Sync state: s3://…` or `./sync-state.json`).
+
+| Situation | Behaviour |
+|---|---|
+| Logged in to AWS | Uses the shared S3 state |
+| Not logged in, dry-run | **Loud warning**, falls back to local `./sync-state.json` — the created/deleted counts may be wrong |
+| Not logged in, `--apply` | Hard error; refuses to write the calendar against unshared state |
+| `LOCAL_STATE=1` | Forces the local file (escape hatch) |
+| `SYNC_STATE_URI=…` | Explicit location, used as-is |
+
+`AWS_PROFILE` defaults to `workload`. The profile's SSO credential provider needs
+`botocore[crt]`, which the venv does not ship, so the script resolves credentials
+via the AWS CLI and passes them to boto3 as environment variables.
+
+If the two ever do drift apart, whichever side actually matches the calendar is the
+correct one; upload it with
+`aws s3 cp sync-state.json s3://ehcw-trainings-<account-id>/ehcw-trainings/sync-state.json`.
