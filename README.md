@@ -31,7 +31,7 @@ uv run python main.py            # fetch PDFs -> markdown/ for inspection
 uv run python list_events.py     # offline preview of extracted events (no credentials)
 uv run python sync.py            # dry-run sync (reads calendar, writes nothing)
 uv run python sync.py --apply    # actually create/update/delete events
-./run-local.sh [--apply|--list]  # fetch, then sync/list using the local key (no AWS)
+./run-local.sh [--apply|--list]  # fetch, then sync/list using the local Google key
 ```
 
 ## Docs
