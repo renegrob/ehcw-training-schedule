@@ -46,3 +46,23 @@ The core behavioral invariants that must be preserved live in
   dropped day). Resolving the real time would require a cross-team join (reading the
   aligned cell in the sibling row), which is not implemented. Only relevant if such
   a team gets configured for sync.
+
+- **A re-issued Wochenplan re-keys that week's events.** The `iCalUID` is a hash of
+  `Event.source`, which is the *PDF filename* (`Wochenplan-38.pdf/U14-A`). The club
+  republishes a corrected week under a new name rather than overwriting it
+  (`Wochenplan-38_Neu.pdf`), and `latest_local_pdfs()` then switches to it — so every
+  event of that week gets a new UID even when its date, time and type are unchanged.
+  The sync reports this as a delete + create of the whole week rather than a quiet
+  `unchanged`, and the new Google event ids lose any per-event state (reminders,
+  manual colour edits).
+
+  The consequence to watch: **tombstones are keyed by UID**, so an event you deleted
+  by hand can come back after its week is re-issued — the tombstone no longer matches
+  the new UID. If a deleted event reappears, this is why; delete it again (the fresh
+  tombstone then sticks until the next re-issue of that week).
+
+  Fixing it means hashing the *week* rather than the filename —
+  `week_key_from_name()` in `fetch_plans.py` already normalises revisions to a week
+  number for exactly this kind of de-duplication. That is deliberately not done: it
+  would re-key every existing event once, i.e. a one-time full delete + recreate of
+  the whole calendar.
