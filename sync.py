@@ -59,7 +59,16 @@ def _uid(event: Event, uid_prefix: str) -> str:
     (Wochenplan-39.pdf -> Wochenplan-39_Neu.pdf), so the filename is
     normalised to its week number first. Otherwise every event of a reissued
     week would get a new UID even though day/time/type didn't change, which
-    breaks tombstones for that week (see docs/architecture.md)."""
+    breaks tombstones for that week (see docs/architecture.md).
+
+    WARNING: any change to the fields hashed here re-keys every event ever
+    synced. sync_state.py's "synced"/"tombstones" entries are keyed by the
+    *old* UID and do not follow automatically - a tombstoned (hand-deleted)
+    event silently reappears because its tombstone no longer matches. Before
+    shipping such a change, migrate `sync-state.json` first (match old
+    entries to their new UID by date+summary, e.g. via a throwaway script
+    using this function) - don't just deploy and let --apply re-create
+    everything."""
     filename, sep, rest = event.source.partition("/")
     stable_source = week_key_from_name(filename) + sep + rest
     identity = "|".join(

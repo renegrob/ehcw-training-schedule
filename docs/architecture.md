@@ -56,3 +56,11 @@ The core behavioral invariants that must be preserved live in
   shipped as a one-time re-key of every existing event (every UID changed on
   that `--apply`, appearing as a full delete + recreate); after that one run,
   re-issues are stable.
+
+  **Lesson learned deploying this fix:** the re-key silently orphaned existing
+  `sync-state.json` tombstones (they're keyed by the *old* UID, which no
+  longer matches anything), so hand-deleted events briefly reappeared on the
+  live calendar until the state was migrated by hand (matching old entries to
+  their new UID by date+summary). Any future change to the fields `_uid()`
+  hashes needs that same state migration *before* the next `--apply` — see the
+  warning in `sync._uid()`'s docstring.
