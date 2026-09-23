@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 from cancellations import apply_cancellations
 from extract_events import Event, safe_extract
-from fetch_plans import latest_local_pdfs
+from fetch_plans import latest_local_pdfs, week_key_from_name
 from google_calendar import get_calendar_service, list_event_intervals
 from overlap import DEFAULT_MIH_UID_PREFIX, KEEP, resolve_mih_overlap, validate_policy
 from spielplan_events import covered_dates, spielplan_supplement
@@ -52,10 +52,19 @@ _COMPARE_FIELDS = ("summary", "location", "description", "colorId", "start", "en
 def _uid(event: Event, uid_prefix: str) -> str:
     """Stable, namespaced iCalUID. Encodes the event's identity (source, day,
     time, type) so a re-run upserts the same event; a changed time yields a new
-    UID (old one is then reconciled away, never duplicated)."""
+    UID (old one is then reconciled away, never duplicated).
+
+    event.source is "<pdf filename>/<team-slug>" - the club republishes a
+    corrected week under a new filename rather than overwriting it
+    (Wochenplan-39.pdf -> Wochenplan-39_Neu.pdf), so the filename is
+    normalised to its week number first. Otherwise every event of a reissued
+    week would get a new UID even though day/time/type didn't change, which
+    breaks tombstones for that week (see docs/architecture.md)."""
+    filename, sep, rest = event.source.partition("/")
+    stable_source = week_key_from_name(filename) + sep + rest
     identity = "|".join(
         [
-            event.source,
+            stable_source,
             event.day_date.isoformat(),
             event.time_start or "allday",
             event.type,
