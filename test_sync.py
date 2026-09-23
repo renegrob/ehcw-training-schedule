@@ -2,10 +2,11 @@
 detection, and the create/update/delete/keep-past reconciliation."""
 
 import unittest
+from dataclasses import replace
 from datetime import date
 
 from extract_events import extract_events
-from test_helpers import CONFIG, u14a_week39
+from test_helpers import CONFIG, build_week, u14a_week39
 import sync
 
 
@@ -24,6 +25,37 @@ class UidTest(unittest.TestCase):
     def test_prefix_applied(self):
         e = extract_events(u14a_week39(), CONFIG)[0]
         self.assertTrue(sync._uid(e, "ehc-wp-").startswith("ehc-wp-"))
+
+    def test_stable_across_a_reissued_plan(self):
+        # The club republishes a corrected week under a new filename rather
+        # than overwriting the old one (Wochenplan-39.pdf -> Wochenplan-39_Neu.pdf).
+        # An unchanged event's UID must survive that rename, or a tombstoned
+        # (hand-deleted) event reappears and every event in the week churns as
+        # a spurious delete+create.
+        original = extract_events(u14a_week39(), CONFIG)[0]
+        reissued = extract_events(
+            build_week(u14a_week39().teams, source_name="Wochenplan-39_Neu.pdf"),
+            CONFIG,
+        )[0]
+        self.assertEqual(
+            sync._uid(original, "ehc-wp-"), sync._uid(reissued, "ehc-wp-")
+        )
+
+    def test_spielplan_source_unaffected_by_week_normalisation(self):
+        # Spielplan filenames ("Spielplan U14 A.pdf") don't match the
+        # Wochenplan week-number pattern, so week_key_from_name() falls back
+        # to returning them unchanged - the UID must still be stable and,
+        # unlike Wochenplan sources, unaffected by this normalisation step.
+        e = replace(
+            extract_events(u14a_week39(), CONFIG)[0],
+            source="Spielplan U14 A.pdf/U14-A",
+        )
+        self.assertEqual(sync._uid(e, "ehc-wp-"), sync._uid(e, "ehc-wp-"))
+        renamed = replace(e, source="Spielplan U14 A_v2.pdf/U14-A")
+        self.assertNotEqual(
+            sync._uid(e, "ehc-wp-"), sync._uid(renamed, "ehc-wp-"),
+            "a non-Wochenplan filename change must still change the UID",
+        )
 
 
 class EventToBodyTest(unittest.TestCase):
