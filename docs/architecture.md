@@ -18,7 +18,9 @@ A chain of small single-purpose modules; `sync.py` is the orchestrator.
    the Wochenplan. See [spielplan.md](spielplan.md).
 5. **`overlap.py`** — reconciles PDF events against existing myice-feed events
    (`mih-ehc-` prefix from aws-ical-sync). Only `myice_replaceable` events are
-   affected; per-team `mih_overlap` policy is REMOVE / KEEP / SHADOW.
+   affected; per-team `mih_overlap` policy is REMOVE / KEEP / SHADOW. Under
+   REMOVE the dropped events are reported back and recorded as `superseded`
+   (see 8) — myice keeps the slot for good.
 6. **`cancellations.py`** — drops plan-derived events listed in a team's
    `cancellations` *before* reconciliation. See [cancelling.md](cancelling.md).
 7. **`sync.py`** — orchestrates: extract + supplement + cancel + overlap, then
@@ -26,7 +28,8 @@ A chain of small single-purpose modules; `sync.py` is the orchestrator.
    `iCalUID` (idempotent, no DB), tagged `source=ehcw-trainings`. Dry-run by
    default; `--apply` writes.
 8. **`sync_state.py`** — records what was synced so a manual deletion in Google
-   Calendar is detected by *absence* and tombstoned (never re-added).
+   Calendar is detected by *absence* and tombstoned (never re-added). The same
+   "stay away" record covers events the myice feed took over (`superseded`).
 
 `convert_to_markdown.py` + `main.py` are the inspection-only path (PDF → Markdown
 table).

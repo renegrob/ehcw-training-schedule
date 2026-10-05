@@ -46,7 +46,11 @@ Fields:
   mih_overlap      (default: "KEEP") - what to do with a PDF event that
                     overlaps an existing myice event (uid_prefix "mih-ehc-")
                     already on the calendar. The myice entry is authoritative:
-                      REMOVE  drop the PDF event
+                      REMOVE  drop the PDF event - permanently: the uid is
+                              recorded as "superseded" so it does not come
+                              back if the myice entry itself later disappears
+                              (that means the player was reported absent).
+                              See docs/cancelling.md.
                       KEEP    keep both
                       SHADOW  keep the PDF event but recolour it Graphite (8)
                     Only applies to events myice can replace (regular team

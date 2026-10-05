@@ -3,9 +3,11 @@ detection, and the create/update/delete/keep-past reconciliation."""
 
 import unittest
 from dataclasses import replace
-from datetime import date
+from unittest import mock
+from datetime import date, datetime
 
-from extract_events import extract_events
+from extract_events import Event, extract_events
+from overlap import REMOVE, resolve_mih_overlap
 from test_helpers import CONFIG, build_week, u14a_week39
 import sync
 
@@ -287,6 +289,138 @@ class ManualDeletionStateTest(unittest.TestCase):
         self.assertEqual(res["honored_deletions"], 0)
         self.assertEqual(len(svc.imported), 1)
         self.assertIn("ehc-wp-gone", state["synced"])
+
+
+class SupersededByMyiceTest(unittest.TestCase):
+    """An event the myice feed took over (mih_overlap=REMOVE) must stay gone
+    when the myice entry itself later disappears - that happens when the player
+    is reported absent, so re-creating the plan event would be wrong."""
+
+    def setUp(self):
+        self.event = Event(
+            source="Wochenplan-39.pdf/U14-A",
+            day_date=date(2099, 1, 1),
+            weekday="Freitag",
+            type="ET",
+            type_full="Eistraining",
+            place="Wallrüti",
+            opponent="",
+            time_start="09:00",
+            time_end="10:00",
+            garderobe="",
+            transport="",
+            summary="🏒 EHC ET",
+            all_day=False,
+            is_error=False,
+            myice_replaceable=True,
+        )
+        self.uid = sync._uid(self.event, "ehc-wp-")
+        self.body = sync.event_to_body(self.event, CONFIG, "ehc-wp-")
+        # A myice booking covering exactly the training slot.
+        self.mih = [(datetime(2099, 1, 1, 9, 0), datetime(2099, 1, 1, 10, 0))]
+        self.state = {"synced": {}, "tombstones": {}, "superseded": {}}
+        self.team_config = {**CONFIG, "calendar_id": "cal", "mih_overlap": "REMOVE"}
+
+    def test_drop_is_recorded_with_date_and_summary(self):
+        sync._record_superseded(self.state, [self.event], "ehc-wp-")
+        self.assertEqual(
+            self.state["superseded"][self.uid],
+            {"date": "2099-01-01", "summary": self.event.summary},
+        )
+
+    def test_recorded_event_is_dropped_from_later_runs(self):
+        self.state["superseded"][self.uid] = {"date": "2099-01-01"}
+        kept, dropped = sync._drop_superseded([self.event], self.state, "ehc-wp-")
+        self.assertEqual(kept, [])
+        self.assertEqual(dropped, 1)
+
+    def test_unrecorded_events_pass_through(self):
+        other = replace(self.event, time_start="11:00", time_end="12:00")
+        self.state["superseded"][self.uid] = {"date": "2099-01-01"}
+        kept, dropped = sync._drop_superseded([self.event, other], self.state, "ehc-wp-")
+        self.assertEqual(kept, [other])
+        self.assertEqual(dropped, 1)
+
+    def _sync_team(self, mih_intervals, on_calendar, config=None):
+        """One sync_team run with a stubbed plan and myice feed."""
+        svc = FakeService(list(on_calendar))
+        with mock.patch.object(sync, "safe_extract", lambda pdf, cfg: [self.event]), \
+             mock.patch.object(sync, "spielplan_supplement",
+                               lambda cfg, events, covered, today: ([], {})), \
+             mock.patch.object(sync, "covered_dates", lambda pdfs: set()), \
+             mock.patch.object(sync, "_mih_intervals",
+                               lambda service, cfg, events: mih_intervals):
+            res = sync.sync_team(
+                svc, config or self.team_config, ["Wochenplan-39.pdf"],
+                dry_run=False, state=self.state,
+            )
+        return res, svc
+
+    def test_sync_team_does_not_resurrect_it_when_myice_entry_disappears(self):
+        """The regression, through sync_team: only the myice feed changes."""
+        # Run 1: no myice booking yet -> we create the plan event.
+        res, svc = self._sync_team([], [])
+        self.assertEqual(res["created"], 1)
+        self.assertIn(self.uid, self.state["synced"])
+
+        # Run 2: the myice booking appears -> it supersedes our copy.
+        res, svc = self._sync_team(self.mih, [{**self.body, "id": "x"}])
+        self.assertEqual(res["deleted"], 1, "our copy must come off the calendar")
+        self.assertEqual(svc.deleted, ["x"])
+        self.assertIn(self.uid, self.state["superseded"])
+
+        # Run 3: the player is reported absent, so the myice booking is gone.
+        # The plan still lists the training - it must not come back.
+        res, svc = self._sync_team([], [])
+        self.assertEqual(res["created"], 0)
+        self.assertEqual(res["superseded"], 1)
+        self.assertEqual(svc.imported, [])
+
+        # Run 4: and it stays away.
+        res, svc = self._sync_team([], [])
+        self.assertEqual(res["created"], 0)
+        self.assertEqual(svc.imported, [])
+
+    def test_shadow_team_ignores_the_superseded_bucket(self):
+        """The bucket is REMOVE's bookkeeping. Under SHADOW the event lives on
+        the calendar anyway, so a stale entry must not suppress it."""
+        self.state["superseded"][self.uid] = {"date": "2099-01-01"}
+        res, svc = self._sync_team(
+            [], [], config={**self.team_config, "mih_overlap": "SHADOW"}
+        )
+        self.assertEqual(res["created"], 1)
+        self.assertEqual(len(svc.imported), 1)
+
+    def test_myice_entry_disappearing_does_not_resurrect_the_event(self):
+        tz = "Europe/Zurich"
+        # Run 1: no myice booking yet - we create the plan event.
+        svc = FakeService([])
+        sync.reconcile(svc, "cal", "ehc-wp-", [(self.uid, dict(self.body))],
+                       tz, False, self.state)
+        self.assertEqual(len(svc.imported), 1)
+        self.assertIn(self.uid, self.state["synced"])
+
+        # Run 2: the myice booking appears and supersedes it.
+        removed = []
+        kept = resolve_mih_overlap([self.event], self.mih, REMOVE, removed=removed)
+        sync._record_superseded(self.state, removed, "ehc-wp-")
+        svc = FakeService([{**self.body, "id": "x"}])
+        res = sync.reconcile(svc, "cal", "ehc-wp-", [], tz, False, self.state)
+        self.assertEqual(kept, [])
+        self.assertEqual(res["deleted"], 1, "our copy must come off the calendar")
+        self.assertIn(self.uid, self.state["superseded"])
+
+        # Run 3: the player is reported absent, so the myice booking is gone.
+        # The plan still lists the training, but it must not come back.
+        kept = resolve_mih_overlap([self.event], [], REMOVE, removed=[])
+        kept, dropped = sync._drop_superseded(kept, self.state, "ehc-wp-")
+        pairs = [(sync._uid(e, "ehc-wp-"), sync.event_to_body(e, CONFIG, "ehc-wp-"))
+                 for e in kept]
+        svc = FakeService([])
+        res = sync.reconcile(svc, "cal", "ehc-wp-", pairs, tz, False, self.state)
+        self.assertEqual(dropped, 1)
+        self.assertEqual(res["created"], 0)
+        self.assertEqual(svc.imported, [])
 
 
 if __name__ == "__main__":

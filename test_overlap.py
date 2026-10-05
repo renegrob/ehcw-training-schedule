@@ -84,6 +84,29 @@ class ResolveOverlapTest(unittest.TestCase):
         events = [make_event()]
         self.assertEqual(resolve_mih_overlap(events, [], REMOVE), events)
 
+    def test_remove_reports_what_it_dropped(self):
+        # The caller must learn which events myice took over, otherwise a later
+        # disappearance of the myice entry resurrects them.
+        e = make_event()
+        removed = []
+        out = resolve_mih_overlap([e], OVERLAP, REMOVE, removed=removed)
+        self.assertEqual(out, [])
+        self.assertEqual(removed, [e])
+
+    def test_policies_that_keep_report_nothing_dropped(self):
+        for policy in (KEEP, SHADOW):
+            removed = []
+            resolve_mih_overlap([make_event()], OVERLAP, policy, removed=removed)
+            self.assertEqual(removed, [], policy)
+
+    def test_untouchable_events_are_never_reported_as_dropped(self):
+        removed = []
+        resolve_mih_overlap(
+            [make_event(is_error=True), make_event(myice_replaceable=False)],
+            OVERLAP, REMOVE, removed=removed,
+        )
+        self.assertEqual(removed, [])
+
 
 if __name__ == "__main__":
     unittest.main()
