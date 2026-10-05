@@ -19,8 +19,12 @@ Storage is a URI (see `location()`):
     dependency (same as the SSM secret fallback in google_calendar.py); the
     Lambda role needs s3:GetObject and s3:PutObject on that key.
 
+The same "never re-create it" record is used for events the myice feed took
+over (see the "superseded" bucket below and overlap.py).
+
 The blob is machine-maintained. Past entries are pruned each save so it stays
-small. To un-cancel an event, delete its uid from "tombstones".
+small. To un-cancel an event, delete its uid from "tombstones" (or, if the
+myice feed had taken it over, from "superseded").
 """
 
 import json
@@ -32,7 +36,17 @@ from pathlib import Path
 # Lambda (via the SYNC_STATE_URI env var) so it persists between invocations.
 DEFAULT_STATE_URI = os.environ.get("SYNC_STATE_URI", "sync-state.json")
 
-_EMPTY = {"synced": {}, "tombstones": {}}
+_EMPTY = {"synced": {}, "tombstones": {}, "superseded": {}}
+
+# The buckets kept in the state file, all {uid: {"date", "summary"}}:
+#   synced      - what we created/kept on the calendar last run.
+#   tombstones  - what you deleted by hand; never re-created.
+#   superseded  - what the myice feed took over under mih_overlap=REMOVE. Also
+#                 never re-created: when such a myice entry later disappears it
+#                 is because the player was reported absent, not because myice
+#                 is behind the plan, so resurrecting the plan event would be
+#                 wrong (and would make the event flap on every feed change).
+_BUCKETS = ("synced", "tombstones", "superseded")
 
 
 def _is_s3(uri: str) -> bool:
@@ -47,8 +61,9 @@ def _split_s3(uri: str) -> tuple[str, str]:
 
 
 def _normalise(data: dict) -> dict:
-    data.setdefault("synced", {})
-    data.setdefault("tombstones", {})
+    """Add any bucket a state file written by an older version lacks."""
+    for bucket in _BUCKETS:
+        data.setdefault(bucket, {})
     return data
 
 
@@ -63,24 +78,25 @@ def load(uri: str | Path = DEFAULT_STATE_URI) -> dict:
             body = boto3.client("s3").get_object(Bucket=bucket, Key=key)["Body"].read()
         except ClientError as exc:
             if exc.response["Error"]["Code"] in ("NoSuchKey", "404"):
-                return dict(synced={}, tombstones={})  # first run: no state yet
+                return _normalise({})  # first run: no state yet
             raise
         return _normalise(json.loads(body))
 
     p = Path(uri)
     if not p.is_file():
-        return dict(synced={}, tombstones={})
+        return _normalise({})
     return _normalise(json.loads(p.read_text()))
 
 
 def prune_past(state: dict, today: date) -> dict:
     """Drop entries whose event day is in the past - past events are never
     (re-)created or deleted, so their state no longer matters."""
-    for bucket in ("synced", "tombstones"):
-        for uid in list(state[bucket]):
-            day = state[bucket][uid].get("date")
+    for bucket in _BUCKETS:
+        entries = state.get(bucket, {})
+        for uid in list(entries):
+            day = entries[uid].get("date")
             if day and date.fromisoformat(day) < today:
-                del state[bucket][uid]
+                del entries[uid]
     return state
 
 

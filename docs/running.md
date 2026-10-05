@@ -64,7 +64,8 @@ to run `uv` commands directly against it,
 
 ### The sync state is shared with the deployed Lambda
 
-The sync state holds the tombstones ("you deleted this event, stay away") and the
+The sync state holds the tombstones ("you deleted this event, stay away"), the
+events the myice feed took over (`superseded`, same "stay away" meaning), and the
 list of events we created. The Lambda keeps it in S3, so if a local run kept its
 own copy the two would diverge and each would undo the other's deletions — a local
 `--apply` would silently resurrect events you deleted, and vice versa.

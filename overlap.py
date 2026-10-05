@@ -51,9 +51,16 @@ def resolve_mih_overlap(
     mih_intervals: list[tuple[datetime, datetime]],
     policy: str,
     shadow_color_id: str = SHADOW_COLOR_ID,
+    removed: list[Event] | None = None,
 ) -> list[Event]:
     """Apply the overlap policy to `events` given the busy `mih_intervals`
-    (start, end) of existing myice events on the same calendar."""
+    (start, end) of existing myice events on the same calendar.
+
+    Pass a list as `removed` to collect the events REMOVE dropped. The caller
+    must remember them (sync_state's "superseded" bucket): once myice owns a
+    slot it owns it for good, so when that myice entry later disappears - which
+    is what happens when the player is reported absent - the plan event must
+    not be resurrected."""
     validate_policy(policy)
     if policy == KEEP or not mih_intervals:
         return events
@@ -74,6 +81,8 @@ def resolve_mih_overlap(
             continue
 
         if policy == REMOVE:
+            if removed is not None:
+                removed.append(event)
             continue  # drop - myice already has it
         # SHADOW: keep but recolour and annotate.
         event.color_id = shadow_color_id

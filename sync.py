@@ -24,7 +24,13 @@ from cancellations import apply_cancellations
 from extract_events import Event, safe_extract
 from fetch_plans import latest_local_pdfs, week_key_from_name
 from google_calendar import get_calendar_service, list_event_intervals
-from overlap import DEFAULT_MIH_UID_PREFIX, KEEP, resolve_mih_overlap, validate_policy
+from overlap import (
+    DEFAULT_MIH_UID_PREFIX,
+    KEEP,
+    REMOVE,
+    resolve_mih_overlap,
+    validate_policy,
+)
 from spielplan_events import covered_dates, spielplan_supplement
 import sync_state
 
@@ -322,8 +328,36 @@ def _mih_intervals(service, config, events):
     )
 
 
+def _record_superseded(state: dict, removed: list[Event], uid_prefix: str) -> None:
+    """Remember the events the myice feed took over (mih_overlap=REMOVE), so a
+    later run cannot re-create them. See sync_state's "superseded" bucket."""
+    store = state.setdefault("superseded", {})
+    for event in removed:
+        store[_uid(event, uid_prefix)] = {
+            "date": event.day_date.isoformat(),
+            "summary": event.summary,
+        }
+
+
+def _drop_superseded(events: list[Event], state: dict, uid_prefix: str):
+    """Drop the events myice took over in an earlier run. They are gone from
+    the calendar already; keeping them out means that when the myice entry
+    disappears - the player was reported absent - the plan event stays away
+    instead of reappearing (and stops flapping on every myice feed change).
+
+    Returns (kept, dropped_count)."""
+    superseded = state.get("superseded") or {}
+    if not superseded:
+        return events, 0
+    kept = [e for e in events if _uid(e, uid_prefix) not in superseded]
+    return kept, len(events) - len(kept)
+
+
 def sync_team(service, config: dict, pdfs, dry_run: bool, state=None) -> dict:
     tzname = config.get("timezone", DEFAULT_TIMEZONE)
+    uid_prefix = config.get("uid_prefix", "ehc-")
+    if state is None:
+        state = {"synced": {}, "tombstones": {}, "superseded": {}}
 
     events: list[Event] = []
     for pdf in pdfs:
@@ -341,12 +375,23 @@ def sync_team(service, config: dict, pdfs, dry_run: bool, state=None) -> dict:
 
     # Resolve overlaps with the authoritative myice feed.
     policy = validate_policy(config.get("mih_overlap", KEEP))
+    superseded = 0
     if policy != KEEP:
+        removed: list[Event] = []
         try:
             intervals = _mih_intervals(service, config, events)
-            events = resolve_mih_overlap(events, intervals, policy)
+            events = resolve_mih_overlap(events, intervals, policy, removed=removed)
         except Exception as exc:  # never abort a sync over overlap lookup
             print(f"  WARN: myice overlap check failed: {exc}")
+        if policy == REMOVE:
+            # Once myice owns a slot it keeps it: record what it just took over
+            # and keep out what it took over before. Otherwise the myice entry
+            # being removed (the player was reported absent) would resurrect
+            # the plan event on the next run. Only REMOVE does this - under
+            # SHADOW/KEEP the event stays on the calendar anyway, so the bucket
+            # is deliberately ignored.
+            _record_superseded(state, removed, uid_prefix)
+            events, superseded = _drop_superseded(events, state, uid_prefix)
 
     # Manually cancelled events: drop them here so reconcile deletes any that
     # are still on the calendar and never re-creates them.
@@ -354,7 +399,6 @@ def sync_team(service, config: dict, pdfs, dry_run: bool, state=None) -> dict:
     events = apply_cancellations(events, config.get("cancellations", []))
     cancelled = before_cancel - len(events)
 
-    uid_prefix = config.get("uid_prefix", "ehc-")
     pairs = []
     for event in events:
         # Never skip a fail-loud error marker.
@@ -369,6 +413,7 @@ def sync_team(service, config: dict, pdfs, dry_run: bool, state=None) -> dict:
     result["team"] = config["team"]
     result["errors"] = sum(1 for e in events if e.is_error)
     result["cancelled"] = cancelled
+    result["superseded"] = superseded
     result.update(spielplan_stats)
     return result
 

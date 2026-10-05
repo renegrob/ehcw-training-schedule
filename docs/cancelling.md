@@ -17,6 +17,19 @@ Two ways, both survive re-runs:
 
 Error markers are never cancellable — a fail-loud marker must always survive.
 
+## A myice booking replaces the plan event for good
+
+With `mih_overlap: "REMOVE"`, a plan event overlapping a myice booking is dropped
+and its uid recorded in `sync-state.json`'s `superseded` bucket. When that myice
+booking later **disappears** the plan event is *not* re-created: the myice feed has
+no gaps, so a vanished booking means the player was reported absent — not that
+myice is behind the plan. (It also stops the event flapping delete/create on every
+feed change, and keeps a briefly-empty feed from resurrecting a week of events.)
+
+To get such an event back, remove its uid from `superseded`. Entries are pruned
+once the event day has passed, and the bucket is ignored for teams on
+`KEEP`/`SHADOW` (there the event stays on the calendar anyway).
+
 ## Sync state storage
 
 State lives at `SYNC_STATE_URI` — a local path by default, or an `s3://bucket/key`
